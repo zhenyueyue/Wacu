@@ -102,6 +102,10 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .mode-card > span { font-size: 13px; font-weight: 700; }
 .mode-card > small { color: #979fa8; font-size: 10px; margin-top: 5px; }
 .mode-card .mode-check { position: absolute; right: 12px; top: 12px; color: #9bd8c3; }
+.settings-reset-position { margin-top: 10px; background: transparent; width: 100%; display: flex; align-items: center; gap: 8px; text-align: left; border: 1px solid #333a3b; color: #b2d8ca; border-radius: 10px; padding: 9px 11px; }
+.settings-reset-position:hover { background: #22302c; }
+.settings-reset-position span { font-size: 11px; font-weight: 600; }
+.settings-reset-position small { margin-left: auto; color: #9299a0; font-size: 10px; }
 .settings-card { border-radius: 15px; background: #202228; border: 1px solid #31353d; }
 .settings-provider { padding: 11px 14px; display: flex; align-items: center; gap: 12px; position: relative; cursor: pointer; }
 .settings-provider + .settings-provider { border-top: 1px solid #30343b; }

@@ -4,7 +4,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   Activity, ArrowLeft, Bell, Check, Eye,
-  Info, LayoutDashboard, MousePointerClick, Pin, PinOff, RefreshCw,
+  Info, LayoutDashboard, MousePointerClick, Pin, PinOff, RefreshCw, RotateCcw,
   Settings2, ShieldCheck, X,
 } from "lucide-react";
 import {
@@ -236,6 +236,14 @@ function Settings() {
   const patch = (values: Partial<Preferences>) => {
     setPreferences({ ...preferences, ...values });
   };
+  const resetPosition = async () => {
+    try {
+      if (native) await invoke("reset_capsule_position");
+      setMessage(native ? "悬浮位置已恢复到当前主屏幕默认位置" : "位置重置仅在 Windows 应用中生效");
+    } catch (error) {
+      setMessage(`位置重置失败：${String(error)}`);
+    }
+  };
   return (
     <main className="settings-page">
       <div className="settings-hero">
@@ -260,6 +268,12 @@ function Settings() {
             {mode === "pinned" && <Check size={16} className="mode-check" />}
           </button>
         </div>
+
+        <button className="settings-reset-position" type="button" onClick={() => void resetPosition()}>
+          <RotateCcw size={15} />
+          <span>重置胶囊位置</span>
+          <small>拖动后找不到胶囊时可以恢复位置</small>
+        </button>
 
         <div className="settings-section-title spaced"><Activity size={15} /> 监控服务 <span>演示阶段</span></div>
         <div className="settings-card service-settings">

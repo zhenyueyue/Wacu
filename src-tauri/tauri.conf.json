@@ -16,7 +16,7 @@
         "title": "Wacu",
         "width": 114,
         "height": 458,
-        "visible": true,
+        "visible": false,
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "decorations": false,
