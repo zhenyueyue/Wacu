@@ -1,7 +1,8 @@
 import { Slider, ComboBox, Palette } from "std-widgets.slint";
 
 global Tokens {
-    out property <float> panel-scale: 1.25;
+    out property <float> panel-scale: 1.0;
+    out property <float> settings-scale: 1.0;
     out property <color> bg: #0f0f10;
     out property <color> panel: #1a1a1d;
     out property <color> raised: #26262b;
@@ -18,7 +19,10 @@ export struct Service {
     accent: color, arc: string, visible: bool,
 }
 
-component Glyph inherits Image { width: (20px * Tokens.panel-scale); height: (20px * Tokens.panel-scale); image-fit: contain; }
+component Glyph inherits Image {
+    in property <float> ui-scale: Tokens.panel-scale;
+    width: 20px * root.ui-scale; height: 20px * root.ui-scale; image-fit: contain;
+}
 
 component IconButton inherits Rectangle {
     in property <image> icon;
@@ -176,6 +180,7 @@ component InfoLine inherits Rectangle {
 }
 
 component ActionRow inherits Rectangle {
+    in property <float> ui-scale: Tokens.panel-scale;
     in property <string> caption;
     in property <image> icon;
     in property <image> leading-icon;
@@ -183,12 +188,12 @@ component ActionRow inherits Rectangle {
     in property <bool> show-leading: false;
     in property <bool> animated: true;
     callback clicked();
-    height: (40px * Tokens.panel-scale); border-radius: (8px * Tokens.panel-scale); border-width: 1px; border-color: #494e51;
+    height: (40px * root.ui-scale); border-radius: (8px * root.ui-scale); border-width: 1px; border-color: #494e51;
     background: hit.pressed ? #272c2e : (hit.has-hover ? #41484c : @linear-gradient(0deg, #303639 0%, #3c4347 100%));
     animate background { duration: root.animated ? 150ms : 0ms; easing: ease-out; }
-    if root.show-leading: Glyph { x: 12px * Tokens.panel-scale; y: (parent.height - self.height) / 2; source: root.leading-icon; }
-    Text { x: root.show-leading ? 40px * Tokens.panel-scale : 0px; y: 0px; width: parent.width - (root.show-leading ? 72px : (root.show-icon ? 32px : 0px)) * Tokens.panel-scale; height: parent.height; text: root.caption; color: Tokens.text; font-size: (14px * Tokens.panel-scale); font-weight: 600; horizontal-alignment: root.show-leading ? left : center; vertical-alignment: center; }
-    if root.show-icon: Glyph { x: root.show-leading ? parent.width - (32px * Tokens.panel-scale) : parent.width / 2 + 26px * Tokens.panel-scale; y: (parent.height - self.height) / 2; source: root.icon; width: (16px * Tokens.panel-scale); height: (16px * Tokens.panel-scale); }
+    if root.show-leading: Glyph { ui-scale: root.ui-scale; x: 12px * root.ui-scale; y: (parent.height - self.height) / 2; source: root.leading-icon; }
+    Text { x: root.show-leading ? 40px * root.ui-scale : 0px; y: 0px; width: parent.width - (root.show-leading ? 72px : (root.show-icon ? 32px : 0px)) * root.ui-scale; height: parent.height; text: root.caption; color: Tokens.text; font-size: (14px * root.ui-scale); font-weight: 600; horizontal-alignment: root.show-leading ? left : center; vertical-alignment: center; }
+    if root.show-icon: Glyph { ui-scale: root.ui-scale; x: root.show-leading ? parent.width - (32px * root.ui-scale) : parent.width / 2 + 26px * root.ui-scale; y: (parent.height - self.height) / 2; source: root.icon; width: (16px * root.ui-scale); height: (16px * root.ui-scale); }
     hit := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
 }
 
@@ -303,14 +308,14 @@ component SettingSwitch inherits Rectangle {
     in property <bool> checked;
     in property <bool> animated: true;
     callback changed(bool);
-    height: (60px * Tokens.panel-scale);
-    Text { x: 0px; y: (4px * Tokens.panel-scale); width: parent.width - (48px * Tokens.panel-scale); height: (22px * Tokens.panel-scale); text: root.label; color: Tokens.text; font-size: (14px * Tokens.panel-scale); vertical-alignment: center; }
-    Text { x: 0px; y: (28px * Tokens.panel-scale); width: parent.width - (48px * Tokens.panel-scale); height: (18px * Tokens.panel-scale); text: root.hint; color: Tokens.secondary; font-size: (11px * Tokens.panel-scale); vertical-alignment: center; overflow: elide; }
+    height: (54px * Tokens.settings-scale);
+    Text { x: 0px; y: (4px * Tokens.settings-scale); width: parent.width - (48px * Tokens.settings-scale); height: (20px * Tokens.settings-scale); text: root.label; color: Tokens.text; font-size: (14px * Tokens.settings-scale); vertical-alignment: center; }
+    Text { x: 0px; y: (27px * Tokens.settings-scale); width: parent.width - (48px * Tokens.settings-scale); height: (16px * Tokens.settings-scale); text: root.hint; color: Tokens.secondary; font-size: (11px * Tokens.settings-scale); vertical-alignment: center; overflow: elide; }
     Rectangle {
-        x: parent.width - (44px * Tokens.panel-scale); y: (8px * Tokens.panel-scale); width: (44px * Tokens.panel-scale); height: (24px * Tokens.panel-scale); border-radius: (12px * Tokens.panel-scale);
+        x: parent.width - (40px * Tokens.settings-scale); y: (8px * Tokens.settings-scale); width: (40px * Tokens.settings-scale); height: (22px * Tokens.settings-scale); border-radius: (11px * Tokens.settings-scale);
         background: root.checked ? @linear-gradient(90deg, #087aff 0%, #0098ff 100%) : #515962;
         animate background { duration: root.animated ? 150ms : 0ms; easing: ease-out; }
-        Rectangle { x: root.checked ? (22px * Tokens.panel-scale) : (2px * Tokens.panel-scale); y: (2px * Tokens.panel-scale); width: (20px * Tokens.panel-scale); height: (20px * Tokens.panel-scale); border-radius: (10px * Tokens.panel-scale); background: #fff; animate x { duration: root.animated ? 150ms : 0ms; easing: ease-out; } }
+        Rectangle { x: root.checked ? (20px * Tokens.settings-scale) : (2px * Tokens.settings-scale); y: (2px * Tokens.settings-scale); width: (18px * Tokens.settings-scale); height: (18px * Tokens.settings-scale); border-radius: (9px * Tokens.settings-scale); background: #fff; animate x { duration: root.animated ? 150ms : 0ms; easing: ease-out; } }
     }
     TouchArea { mouse-cursor: pointer; clicked => { root.changed(!root.checked); } }
 }
@@ -321,22 +326,22 @@ component SideNav inherits Rectangle {
     in property <bool> selected;
     in property <bool> animated: true;
     callback clicked();
-    height: (44px * Tokens.panel-scale); border-radius: (8px * Tokens.panel-scale);
+    height: (38px * Tokens.settings-scale); border-radius: (8px * Tokens.settings-scale);
     background: root.selected ? @linear-gradient(90deg, #173a56 0%, #1c425f 100%) : (hit.has-hover ? #262c30 : transparent);
     animate background { duration: root.animated ? 150ms : 0ms; easing: ease-out; }
-    if root.selected: Rectangle { x: 0px; y: (5px * Tokens.panel-scale); width: (3px * Tokens.panel-scale); height: parent.height - (10px * Tokens.panel-scale); border-radius: (2px * Tokens.panel-scale); background: Tokens.blue; }
-    Glyph { x: (12px * Tokens.panel-scale); y: (parent.height - self.height) / 2; source: root.icon; }
-    Text { x: (42px * Tokens.panel-scale); y: 0px; width: parent.width - (46px * Tokens.panel-scale); height: parent.height; text: root.label; color: Tokens.text; font-size: (14px * Tokens.panel-scale); font-weight: root.selected ? 500 : 400; vertical-alignment: center; }
+    if root.selected: Rectangle { x: 0px; y: (5px * Tokens.settings-scale); width: (3px * Tokens.settings-scale); height: parent.height - (10px * Tokens.settings-scale); border-radius: (2px * Tokens.settings-scale); background: Tokens.blue; }
+    Glyph { ui-scale: Tokens.settings-scale; x: (10px * Tokens.settings-scale); y: (parent.height - self.height) / 2; width: 18px; height: 18px; source: root.icon; }
+    Text { x: (36px * Tokens.settings-scale); y: 0px; width: parent.width - (40px * Tokens.settings-scale); height: parent.height; text: root.label; color: Tokens.text; font-size: (14px * Tokens.settings-scale); font-weight: root.selected ? 500 : 400; vertical-alignment: center; }
     hit := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
 }
-component SectionTitle inherits Text { height: (24px * Tokens.panel-scale); color: Tokens.text; font-size: (16px * Tokens.panel-scale); font-weight: 600; }
+component SectionTitle inherits Text { height: (24px * Tokens.settings-scale); color: Tokens.text; font-size: (16px * Tokens.settings-scale); font-weight: 600; }
 // Keep the native ComboBox's popup, focus, keyboard and accessibility behavior.
 // The drawing above it supplies the approved rounded surface and chevron.
 component SettingSelect inherits Rectangle {
     in property <[string]> model;
     in property <int> index: 0;
     callback selected(int);
-    border-radius: 8px * Tokens.panel-scale; clip: true;
+    border-radius: 8px * Tokens.settings-scale; clip: true;
     Rectangle {
         x: 0px; y: 0px; width: parent.width; height: parent.height; opacity: 0;
         combo := ComboBox {
@@ -347,25 +352,25 @@ component SettingSelect inherits Rectangle {
     }
     Rectangle {
         x: 0px; y: 0px; width: parent.width; height: parent.height;
-        border-radius: 8px * Tokens.panel-scale; border-width: 1px;
+        border-radius: 8px * Tokens.settings-scale; border-width: 1px;
         border-color: combo.has-focus ? #438cff : #42494e;
         background: @linear-gradient(0deg, #262c30 0%, #30373b 100%);
-        Text { x: 12px * Tokens.panel-scale; y: 0px; width: parent.width - 40px * Tokens.panel-scale; height: parent.height; text: root.model[root.index]; color: #e2e6e8; font-size: 14px * Tokens.panel-scale; vertical-alignment: center; }
-        Glyph { x: parent.width - 28px * Tokens.panel-scale; y: (parent.height - self.height) / 2; width: 16px * Tokens.panel-scale; height: self.width; source: @image-url("../assets/icons/down.svg"); }
+        Text { x: 12px * Tokens.settings-scale; y: 0px; width: parent.width - 40px * Tokens.settings-scale; height: parent.height; text: root.model[root.index]; color: #e2e6e8; font-size: 14px * Tokens.settings-scale; vertical-alignment: center; }
+        Glyph { ui-scale: Tokens.settings-scale; x: parent.width - 28px * Tokens.settings-scale; y: (parent.height - self.height) / 2; width: 16px * Tokens.settings-scale; height: self.width; source: @image-url("../assets/icons/down.svg"); }
     }
 }
 
 component OpacityRow inherits Rectangle {
     in property <float> value;
     callback changed(float);
-    height: (36px * Tokens.panel-scale);
-    Text { x: 0px; y: 0px; width: (64px * Tokens.panel-scale); height: parent.height; text: "透明度"; font-size: (13px * Tokens.panel-scale); color: Tokens.text; vertical-alignment: center; }
+    height: (36px * Tokens.settings-scale);
+    Text { x: 0px; y: 0px; width: (64px * Tokens.settings-scale); height: parent.height; text: "透明度"; font-size: (13px * Tokens.settings-scale); color: Tokens.text; vertical-alignment: center; }
     Rectangle {
-        x: (70px * Tokens.panel-scale); y: (3px * Tokens.panel-scale); width: parent.width - (111px * Tokens.panel-scale); height: (30px * Tokens.panel-scale);
+        x: (70px * Tokens.settings-scale); y: (3px * Tokens.settings-scale); width: parent.width - (111px * Tokens.settings-scale); height: (30px * Tokens.settings-scale);
         // Retain native pointer, keyboard and accessibility handling beneath the drawing.
         Slider { x: 0px; y: 0px; width: parent.width; height: parent.height; opacity: 0; minimum: 65; maximum: 100; value: root.value; changed => { root.changed(self.value); } }
         Rectangle {
-            x: 10px; y: (parent.height - self.height) / 2; width: parent.width - 20px; height: 6px * Tokens.panel-scale; border-radius: self.height / 2; background: #41494f;
+            x: 10px; y: (parent.height - self.height) / 2; width: parent.width - 20px; height: 6px * Tokens.settings-scale; border-radius: self.height / 2; background: #41494f;
             Rectangle { x: 0px; y: 0px; height: parent.height; width: parent.width * clamp((root.value - 65) / 35, 0, 1); border-radius: parent.border-radius; background: @linear-gradient(90deg, #087aff 0%, #0098ff 100%); }
         }
         Rectangle {
@@ -373,18 +378,18 @@ component OpacityRow inherits Rectangle {
             background: Tokens.blue; border-width: 1.5px; border-color: #edf6ff; drop-shadow-blur: 3px; drop-shadow-color: #00000040;
         }
     }
-    Text { width: (38px * Tokens.panel-scale); x: parent.width - (38px * Tokens.panel-scale); y: 0px; height: parent.height; text: round(root.value) + "%"; color: Tokens.text; font-size: (12px * Tokens.panel-scale); horizontal-alignment: right; vertical-alignment: center; }
+    Text { width: (38px * Tokens.settings-scale); x: parent.width - (38px * Tokens.settings-scale); y: 0px; height: parent.height; text: round(root.value) + "%"; color: Tokens.text; font-size: (12px * Tokens.settings-scale); horizontal-alignment: right; vertical-alignment: center; }
 }
 component PositionRow inherits Rectangle {
     in property <int> side;
     callback changed(int);
-    height: (40px * Tokens.panel-scale);
-    Text { x: 0px; y: 0px; width: (64px * Tokens.panel-scale); height: parent.height; text: "胶囊位置"; color: Tokens.text; font-size: (13px * Tokens.panel-scale); vertical-alignment: center; }
-    SettingSelect { x: round(74 * Tokens.panel-scale) * 1px; y: 0px; width: parent.width - self.x; height: parent.height; model: ["右侧", "左侧"]; index: root.side; selected(value) => { root.changed(value); } }
+    height: (36px * Tokens.settings-scale);
+    Text { x: 0px; y: 0px; width: (64px * Tokens.settings-scale); height: parent.height; text: "胶囊位置"; color: Tokens.text; font-size: (13px * Tokens.settings-scale); vertical-alignment: center; }
+    SettingSelect { x: round(74 * Tokens.settings-scale) * 1px; y: 0px; width: parent.width - self.x; height: parent.height; model: ["右侧", "左侧"]; index: root.side; selected(value) => { root.changed(value); } }
 }
 
 export component SettingsWindow inherits Window {
-    title: "Wacu · 设置"; width: (424px * Tokens.panel-scale); height: (620px * Tokens.panel-scale);
+    title: "Wacu · 设置"; width: 460px; height: 600px;
     background: transparent; no-frame: true; default-font-family: "Segoe UI";
     default-font-size: 16px;
     init => { Palette.color-scheme = ColorScheme.dark; }
@@ -413,26 +418,26 @@ export component SettingsWindow inherits Window {
     callback reset-position();
     callback open-link(int);
     Rectangle {
-        x: (12px * Tokens.panel-scale); y: (12px * Tokens.panel-scale); width: parent.width - (24px * Tokens.panel-scale); height: parent.height - (24px * Tokens.panel-scale);
-        border-radius: (12px * Tokens.panel-scale); border-width: 1px; border-color: #35353b;
+        x: (12px * Tokens.settings-scale); y: (12px * Tokens.settings-scale); width: parent.width - (24px * Tokens.settings-scale); height: parent.height - (24px * Tokens.settings-scale);
+        border-radius: (12px * Tokens.settings-scale); border-width: 1px; border-color: #35353b;
         background: @linear-gradient(135deg, #282d2f 0%, #1d2224 45%, #191d1f 100%);
-        drop-shadow-blur: (16px * Tokens.panel-scale); drop-shadow-offset-y: (4px * Tokens.panel-scale); drop-shadow-color: #00000040;
+        drop-shadow-blur: (16px * Tokens.settings-scale); drop-shadow-offset-y: (4px * Tokens.settings-scale); drop-shadow-color: #00000040;
         VerticalLayout {
             spacing: 0px;
             Rectangle {
-                height: (60px * Tokens.panel-scale);
-                Glyph { x: (18px * Tokens.panel-scale); y: (parent.height - self.height) / 2; source: @image-url("../assets/icons/settings.svg"); }
-                Text { x: (54px * Tokens.panel-scale); y: 0px; height: parent.height; text: "Wacu 设置"; color: Tokens.text; font-size: (17px * Tokens.panel-scale); font-weight: 500; vertical-alignment: center; }
-                TouchArea { width: parent.width - (48px * Tokens.panel-scale); height: parent.height; mouse-cursor: grab; pointer-event(event) => { if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) { root.start-settings-drag(); } } }
-                IconButton { x: parent.width - (40px * Tokens.panel-scale); y: (parent.height - self.height) / 2; icon: @image-url("../assets/icons/close.svg"); animated: root.animations-on; activated => { root.close-settings(); } }
+                height: (52px * Tokens.settings-scale);
+                Glyph { ui-scale: Tokens.settings-scale; x: (18px * Tokens.settings-scale); y: (parent.height - self.height) / 2; source: @image-url("../assets/icons/settings.svg"); }
+                Text { x: (48px * Tokens.settings-scale); y: 0px; height: parent.height; text: "Wacu 设置"; color: Tokens.text; font-size: (18px * Tokens.settings-scale); font-weight: 500; vertical-alignment: center; }
+                TouchArea { width: parent.width - (48px * Tokens.settings-scale); height: parent.height; mouse-cursor: grab; pointer-event(event) => { if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) { root.start-settings-drag(); } } }
+                IconButton { ui-scale: Tokens.settings-scale; x: parent.width - (40px * Tokens.settings-scale); y: (parent.height - self.height) / 2; icon: @image-url("../assets/icons/close.svg"); animated: root.animations-on; activated => { root.close-settings(); } }
             }
             Rectangle { height: 1px; background: Tokens.divider; }
             HorizontalLayout {
                 spacing: 0px;
                 Rectangle {
-                    width: (132px * Tokens.panel-scale);
+                    width: (116px * Tokens.settings-scale);
                     VerticalLayout {
-                        padding-top: (10px * Tokens.panel-scale); padding-left: (8px * Tokens.panel-scale); padding-right: (8px * Tokens.panel-scale); spacing: (4px * Tokens.panel-scale);
+                        padding-top: (10px * Tokens.settings-scale); padding-left: (8px * Tokens.settings-scale); padding-right: (8px * Tokens.settings-scale); spacing: (4px * Tokens.settings-scale);
                         SideNav { label: "常规"; icon: @image-url("../assets/icons/settings.svg"); animated: root.animations-on; selected: root.selected-page == 0; clicked => { root.selected-page = 0; } }
                         SideNav { label: "服务管理"; icon: @image-url("../assets/icons/grid.svg"); animated: root.animations-on; selected: root.selected-page == 1; clicked => { root.selected-page = 1; } }
                         SideNav { label: "外观"; icon: @image-url("../assets/icons/palette.svg"); animated: root.animations-on; selected: root.selected-page == 2; clicked => { root.selected-page = 2; } }
@@ -445,61 +450,61 @@ export component SettingsWindow inherits Window {
                 Rectangle {
                     horizontal-stretch: 1;
                     VerticalLayout {
-                        padding-top: (12px * Tokens.panel-scale); padding-bottom: (12px * Tokens.panel-scale); padding-left: (16px * Tokens.panel-scale); padding-right: (16px * Tokens.panel-scale); spacing: (10px * Tokens.panel-scale);
+                        padding-top: (12px * Tokens.settings-scale); padding-bottom: (12px * Tokens.settings-scale); padding-left: (16px * Tokens.settings-scale); padding-right: (16px * Tokens.settings-scale); spacing: (10px * Tokens.settings-scale);
                         if root.selected-page == 0: VerticalLayout {
                             spacing: 0px;
                             SettingSwitch { label: "开机启动"; hint: "系统启动时自动运行 Wacu"; checked: root.startup-on; animated: root.animations-on; changed(value) => { root.set-startup(value); } }
                             SettingSwitch { label: "常驻显示"; hint: "在桌面侧边显示胶囊"; checked: root.pinned-mode; animated: root.animations-on; changed(value) => { root.set-pinned(value); } }
                             SettingSwitch { label: "贴边隐藏"; hint: "靠近屏幕边缘时自动隐藏"; checked: root.edge-hide-on; animated: root.animations-on; changed(value) => { root.set-edge-hide(value); } }
                             SettingSwitch { label: "显示动画"; hint: "启用界面动画效果"; checked: root.animations-on; animated: root.animations-on; changed(value) => { root.set-animations(value); } }
-                            Rectangle { height: (16px * Tokens.panel-scale); }
+                            Rectangle { height: (8px * Tokens.settings-scale); }
                             Rectangle { height: 1px; background: Tokens.divider; }
-                            Rectangle { height: (10px * Tokens.panel-scale); }
+                            Rectangle { height: (10px * Tokens.settings-scale); }
                             OpacityRow { value: root.opacity-percent; changed(value) => { root.set-opacity(value); } }
-                            Rectangle { height: (8px * Tokens.panel-scale); }
+                            Rectangle { height: (8px * Tokens.settings-scale); }
                             PositionRow { side: root.dock-side; changed(value) => { root.set-dock-side(value); } }
-                            Rectangle { height: (8px * Tokens.panel-scale); }
+                            Rectangle { height: (8px * Tokens.settings-scale); }
                             Rectangle {
-                                height: (40px * Tokens.panel-scale);
-                                Text { x: 0px; y: 0px; width: (64px * Tokens.panel-scale); height: parent.height; text: "语言"; color: Tokens.text; font-size: (13px * Tokens.panel-scale); vertical-alignment: center; }
-                                SettingSelect { x: round(74 * Tokens.panel-scale) * 1px; y: 0px; width: parent.width - self.x; height: parent.height; model: ["简体中文"]; index: 0; }
+                                height: (36px * Tokens.settings-scale);
+                                Text { x: 0px; y: 0px; width: (64px * Tokens.settings-scale); height: parent.height; text: "语言"; color: Tokens.text; font-size: (13px * Tokens.settings-scale); vertical-alignment: center; }
+                                SettingSelect { x: round(74 * Tokens.settings-scale) * 1px; y: 0px; width: parent.width - self.x; height: parent.height; model: ["简体中文"]; index: 0; }
                             }
-                            Rectangle { height: (10px * Tokens.panel-scale); }
+                            Rectangle { height: (10px * Tokens.settings-scale); }
                             Rectangle {
-                                height: (40px * Tokens.panel-scale);
-                                Text { x: 0px; y: 0px; width: (64px * Tokens.panel-scale); height: parent.height; text: "检查更新"; color: Tokens.text; font-size: (13px * Tokens.panel-scale); vertical-alignment: center; }
-                                ActionRow { x: (74px * Tokens.panel-scale); y: 0px; width: parent.width - (74px * Tokens.panel-scale); height: parent.height; caption: "检查更新"; animated: root.animations-on; clicked => { root.open-link(3); } }
+                                height: (36px * Tokens.settings-scale);
+                                Text { x: 0px; y: 0px; width: (64px * Tokens.settings-scale); height: parent.height; text: "检查更新"; color: Tokens.text; font-size: (13px * Tokens.settings-scale); vertical-alignment: center; }
+                                ActionRow { ui-scale: Tokens.settings-scale; x: (74px * Tokens.settings-scale); y: 0px; width: parent.width - (74px * Tokens.settings-scale); height: parent.height; caption: "检查更新"; animated: root.animations-on; clicked => { root.open-link(3); } }
                             }
                         }
                         if root.selected-page == 1: VerticalLayout {
-                            spacing: (8px * Tokens.panel-scale);
+                            spacing: (8px * Tokens.settings-scale);
                             SectionTitle { text: "服务管理"; }
-                            Text { height: (32px * Tokens.panel-scale); text: "选择胶囊中显示的服务"; color: Tokens.secondary; font-size: (12px * Tokens.panel-scale); vertical-alignment: center; }
+                            Text { height: (32px * Tokens.settings-scale); text: "选择胶囊中显示的服务"; color: Tokens.secondary; font-size: (12px * Tokens.settings-scale); vertical-alignment: center; }
                             SettingSwitch { label: "Claude Code"; hint: "Anthropic · Claude"; checked: root.show-claude; animated: root.animations-on; changed(value) => { root.toggle-service(1, value); } }
                             SettingSwitch { label: "Codex"; hint: "OpenAI · ChatGPT"; checked: root.show-codex; animated: root.animations-on; changed(value) => { root.toggle-service(0, value); } }
                             SettingSwitch { label: "WorkBuddy"; hint: "积分额度"; checked: root.show-workbuddy; animated: root.animations-on; changed(value) => { root.toggle-service(2, value); } }
-                            Text { height: (52px * Tokens.panel-scale); text: "用量与图表均为演示数据。\n尚未连接真实账户。"; color: Tokens.secondary; font-size: (12px * Tokens.panel-scale); wrap: word-wrap; }
+                            Text { height: (52px * Tokens.settings-scale); text: "用量与图表均为演示数据。\n尚未连接真实账户。"; color: Tokens.secondary; font-size: (12px * Tokens.settings-scale); wrap: word-wrap; }
                         }
                         if root.selected-page == 2: VerticalLayout {
-                            spacing: (12px * Tokens.panel-scale);
+                            spacing: (12px * Tokens.settings-scale);
                             SectionTitle { text: "外观"; }
                             Text {
-                                height: (20px * Tokens.panel-scale); text: "胶囊大小";
-                                color: Tokens.text; font-size: (13px * Tokens.panel-scale);
+                                height: (20px * Tokens.settings-scale); text: "胶囊大小";
+                                color: Tokens.text; font-size: (13px * Tokens.settings-scale);
                                 vertical-alignment: center;
                             }
                             HorizontalLayout {
-                                height: (42px * Tokens.panel-scale); spacing: (7px * Tokens.panel-scale);
+                                height: (42px * Tokens.settings-scale); spacing: (7px * Tokens.settings-scale);
                                 for size-name[idx] in ["紧凑", "标准", "宽松"]: Rectangle {
                                     horizontal-stretch: 1;
-                                    border-radius: (8px * Tokens.panel-scale); border-width: 1px;
+                                    border-radius: (8px * Tokens.settings-scale); border-width: 1px;
                                     border-color: root.capsule-size == idx ? #429ffd : #414149;
                                     background: root.capsule-size == idx ? #1c405e : #26262b;
                                     animate background, border-color { duration: root.animations-on ? 150ms : 0ms; easing: ease-out; }
                                     Text {
                                         width: parent.width; height: parent.height;
                                         text: size-name;
-                                        font-size: (13px * Tokens.panel-scale);
+                                        font-size: (13px * Tokens.settings-scale);
                                         font-weight: root.capsule-size == idx ? 600 : 400;
                                         color: root.capsule-size == idx ? #edf7ff : #bdbdc7;
                                         horizontal-alignment: center; vertical-alignment: center;
@@ -511,8 +516,8 @@ export component SettingsWindow inherits Window {
                                 }
                             }
                             Text {
-                                height: (20px * Tokens.panel-scale); text: "选择后立即生效，重启也会记住";
-                                color: Tokens.secondary; font-size: (11px * Tokens.panel-scale);
+                                height: (20px * Tokens.settings-scale); text: "选择后立即生效，重启也会记住";
+                                color: Tokens.secondary; font-size: (11px * Tokens.settings-scale);
                                 vertical-alignment: center;
                             }
                             OpacityRow { value: root.opacity-percent; changed(value) => { root.set-opacity(value); } }
@@ -520,42 +525,42 @@ export component SettingsWindow inherits Window {
                             Rectangle { height: 1px; background: Tokens.divider; }
                             SectionTitle { text: "服务配色"; }
                             HorizontalLayout {
-                                height: (36px * Tokens.panel-scale); spacing: (12px * Tokens.panel-scale); alignment: start;
-                                Rectangle { width: (32px * Tokens.panel-scale); height: (32px * Tokens.panel-scale); border-radius: (16px * Tokens.panel-scale); background: #22c55e; }
-                                Rectangle { width: (32px * Tokens.panel-scale); height: (32px * Tokens.panel-scale); border-radius: (16px * Tokens.panel-scale); background: #ff8a4c; }
-                                Rectangle { width: (32px * Tokens.panel-scale); height: (32px * Tokens.panel-scale); border-radius: (16px * Tokens.panel-scale); background: #8b5cf6; }
+                                height: (36px * Tokens.settings-scale); spacing: (12px * Tokens.settings-scale); alignment: start;
+                                Rectangle { width: (32px * Tokens.settings-scale); height: (32px * Tokens.settings-scale); border-radius: (16px * Tokens.settings-scale); background: #22c55e; }
+                                Rectangle { width: (32px * Tokens.settings-scale); height: (32px * Tokens.settings-scale); border-radius: (16px * Tokens.settings-scale); background: #ff8a4c; }
+                                Rectangle { width: (32px * Tokens.settings-scale); height: (32px * Tokens.settings-scale); border-radius: (16px * Tokens.settings-scale); background: #8b5cf6; }
                             }
-                            Text { height: (32px * Tokens.panel-scale); text: "Windows 11 深色风格"; color: Tokens.secondary; font-size: (12px * Tokens.panel-scale); }
+                            Text { height: (32px * Tokens.settings-scale); text: "Windows 11 深色风格"; color: Tokens.secondary; font-size: (12px * Tokens.settings-scale); }
                         }
                         if root.selected-page == 3: VerticalLayout {
-                            spacing: (12px * Tokens.panel-scale);
+                            spacing: (12px * Tokens.settings-scale);
                             SectionTitle { text: "行为"; }
                             SettingSwitch { label: "显示动画"; hint: "启用悬停、按下和展开过渡"; checked: root.animations-on; animated: root.animations-on; changed(value) => { root.set-animations(value); } }
                             SettingSwitch { label: "贴边隐藏"; hint: "移到屏幕边缘可恢复胶囊"; checked: root.edge-hide-on; animated: root.animations-on; changed(value) => { root.set-edge-hide(value); } }
-                            ActionRow { caption: "恢复胶囊默认位置"; animated: root.animations-on; clicked => { root.reset-position(); } }
-                            Text { height: (70px * Tokens.panel-scale); text: "弹出模式下，点击空白处收起。\n常驻模式可按住胶囊顶端拖动。"; color: Tokens.secondary; font-size: (12px * Tokens.panel-scale); wrap: word-wrap; }
+                            ActionRow { ui-scale: Tokens.settings-scale; caption: "恢复胶囊默认位置"; animated: root.animations-on; clicked => { root.reset-position(); } }
+                            Text { height: (70px * Tokens.settings-scale); text: "弹出模式下，点击空白处收起。\n常驻模式可按住胶囊顶端拖动。"; color: Tokens.secondary; font-size: (12px * Tokens.settings-scale); wrap: word-wrap; }
                         }
                         if root.selected-page == 4: VerticalLayout {
-                            spacing: (16px * Tokens.panel-scale);
+                            spacing: (16px * Tokens.settings-scale);
                             SectionTitle { text: "关于 Wacu"; }
-                            Text { height: (36px * Tokens.panel-scale); text: "静静守望，每一份余量。"; color: Tokens.text; font-size: (14px * Tokens.panel-scale); }
-                            Text { height: (24px * Tokens.panel-scale); text: "版本 0.2.0"; color: Tokens.secondary; font-size: (12px * Tokens.panel-scale); }
-                            Text { height: (64px * Tokens.panel-scale); text: "轻量、简洁、不打扰。\n用量数据与历史图表为演示，\n尚未连接真实账户。"; color: Tokens.secondary; font-size: (12px * Tokens.panel-scale); wrap: word-wrap; }
-                            ActionRow { caption: "开源项目"; icon: @image-url("../assets/icons/external.svg"); show-icon: true; animated: root.animations-on; clicked => { root.open-link(0); } }
+                            Text { height: (36px * Tokens.settings-scale); text: "静静守望，每一份余量。"; color: Tokens.text; font-size: (14px * Tokens.settings-scale); }
+                            Text { height: (24px * Tokens.settings-scale); text: "版本 0.2.0"; color: Tokens.secondary; font-size: (12px * Tokens.settings-scale); }
+                            Text { height: (64px * Tokens.settings-scale); text: "轻量、简洁、不打扰。\n用量数据与历史图表为演示，\n尚未连接真实账户。"; color: Tokens.secondary; font-size: (12px * Tokens.settings-scale); wrap: word-wrap; }
+                            ActionRow { ui-scale: Tokens.settings-scale; caption: "开源项目"; icon: @image-url("../assets/icons/external.svg"); show-icon: true; animated: root.animations-on; clicked => { root.open-link(0); } }
                         }
-                        if root.status-message != "": Text { height: (32px * Tokens.panel-scale); text: root.status-message; color: #f59e0b; font-size: (11px * Tokens.panel-scale); wrap: word-wrap; }
+                        if root.status-message != "": Text { height: (32px * Tokens.settings-scale); text: root.status-message; color: #f59e0b; font-size: (11px * Tokens.settings-scale); wrap: word-wrap; }
                         Rectangle { vertical-stretch: 1; }
                     }
                 }
             }
             Rectangle { height: 1px; background: Tokens.divider; }
             Rectangle {
-                height: (40px * Tokens.panel-scale);
-                Text { x: (16px * Tokens.panel-scale); y: 0px; height: parent.height; text: "Wacu v0.2.0"; color: Tokens.secondary; font-size: (12px * Tokens.panel-scale); vertical-alignment: center; }
+                height: (36px * Tokens.settings-scale);
+                Text { x: (16px * Tokens.settings-scale); y: 0px; height: parent.height; text: "Wacu v0.2.0"; color: Tokens.secondary; font-size: (12px * Tokens.settings-scale); vertical-alignment: center; }
                 HorizontalLayout {
-                    padding-left: (235px * Tokens.panel-scale); padding-right: (16px * Tokens.panel-scale); alignment: end; spacing: (12px * Tokens.panel-scale);
+                    padding-left: (235px * Tokens.settings-scale); padding-right: (16px * Tokens.settings-scale); alignment: end; spacing: (12px * Tokens.settings-scale);
                     for caption[idx] in ["开源", "反馈", "帮助"]: Rectangle {
-                        Text { text: caption; color: link.has-hover ? #85c5ff : #2997ff; font-size: (11px * Tokens.panel-scale); horizontal-alignment: center; vertical-alignment: center; }
+                        Text { text: caption; color: link.has-hover ? #85c5ff : #2997ff; font-size: (11px * Tokens.settings-scale); horizontal-alignment: center; vertical-alignment: center; }
                         link := TouchArea { mouse-cursor: pointer; clicked => { root.open-link(idx); } }
                     }
                 }

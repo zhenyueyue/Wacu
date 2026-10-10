@@ -729,7 +729,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     // A visible native tray keeps Slint's event loop running while windows are hidden.
-    tray.show()?;
+    #[cfg(not(debug_assertions))]
+    let show_tray = true;
+    #[cfg(debug_assertions)]
+    let show_tray = !matches!(
+        qa_view.as_str(),
+        "capsule" | "quick" | "detail" | "settings"
+    );
+    if show_tray {
+        tray.show()?;
+    }
     if initial.mode == Mode::Pinned {
         show_capsule(&capsule, &initial, None);
     }
@@ -753,13 +762,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             let s = settings.as_weak();
             Timer::single_shot(Duration::from_millis(300), move || {
                 if let Some(s) = s.upgrade() {
-                    qa_click(s.window(), 320.0, 462.0);
+                    qa_click(s.window(), 250.0, 330.0);
                 }
             });
             let s = settings.as_weak();
             Timer::single_shot(Duration::from_millis(400), move || {
                 if let Some(s) = s.upgrade() {
-                    qa_click(s.window(), 390.0, 520.0);
+                    qa_click(s.window(), 325.0, 374.0);
                 }
             });
             let s = settings.as_weak();
