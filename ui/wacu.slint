@@ -53,27 +53,19 @@ component QuotaItem inherits Rectangle {
         x: (parent.width - self.width) / 2; y: hit.pressed ? 1px : 0px;
         width: (root.size-mode == 0 ? 36px : (root.size-mode == 1 ? 50px : 62px)) - (hit.pressed ? 2px : 0px);
         height: self.width; border-radius: self.width / 2;
-        background: Tokens.bg;
-        border-width: 1px; border-color: root.selected ? #3b82f6 : transparent;
-        drop-shadow-blur: root.selected ? 10px : 0px; drop-shadow-color: #3b82f666;
+        background: transparent;
         animate width, height, y { duration: root.animated ? 100ms : 0ms; easing: ease-out; }
-        Rectangle {
-            x: 2px; y: 2px; width: parent.width - 4px; height: parent.height - 4px;
-            border-radius: self.width / 2;
-            border-width: root.size-mode == 0 ? 3px : 4px;
-            border-color: #3d4a42; background: @linear-gradient(115deg, #161b18 0%, #0f1210 100%);
-        }
         Path {
             x: 2px; y: 2px; width: parent.width - 4px; height: parent.height - 4px;
             commands: root.service.arc; stroke: root.service.accent;
-            stroke-width: root.size-mode == 0 ? 3px : 4px; fill: transparent;
+            stroke-width: 2px; fill: transparent;
         }
         Rectangle {
             x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
             width: root.size-mode == 0 ? 20px : (root.size-mode == 1 ? 28px : 36px);
             height: self.width; border-radius: self.width / 2;
-            border-width: 1px; border-color: root.service.accent.darker(15%);
             background: @linear-gradient(130deg, root.service.accent.brighter(8%) 0%, (root.service.source-index == 1 ? #ff7042 : root.service.accent) 100%);
+            drop-shadow-blur: root.selected ? 8px : 0px; drop-shadow-color: #3b82f666;
             Rectangle {
                 x: parent.width * 0.24; y: parent.height * 0.35;
                 width: parent.width * 0.17; height: self.width;
