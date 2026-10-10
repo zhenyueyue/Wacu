@@ -1,5 +1,6 @@
-import { Button, CheckBox, Switch, ScrollView } from "std-widgets.slint";
+import { Slider } from "std-widgets.slint";
 
+// Wacu native design system. Only three providers are available in the current demo.
 export struct Service {
     source-index: int,
     label: string,
@@ -13,54 +14,55 @@ export struct Service {
     visible: bool,
 }
 
-component MiniAction inherits Rectangle {
-    in property <string> symbol;
-    callback clicked();
-    width: 34px;
-    height: 34px;
-    border-radius: 12px;
-    background: hit.has-hover ? #34383e : #202328;
-    animate background { duration: 140ms; }
+component IconButton inherits Rectangle {
+    in property <string> glyph;
+    in property <bool> selected: false;
+    in property <bool> animated: true;
+    callback activated();
+    width: 30px;
+    height: 30px;
+    border-radius: 15px;
+    background: selected ? #273d37 : (action.has-hover ? #383b41 : #25292e);
+    border-width: 1px;
+    border-color: selected ? #578e77 : (action.has-hover ? #4b535b : #31363c);
+    animate background, border-color { duration: root.animated ? 150ms : 0ms; easing: ease-out; }
     Text {
-        text: root.symbol;
-        color: hit.has-hover ? #ddf8eb : #b0b9bf;
-        font-size: 17px;
+        text: root.glyph;
+        color: action.has-hover ? #f5faf7 : #c8d1d0;
+        font-size: 16px;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
-    hit := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
-    }
+    action := TouchArea { mouse-cursor: pointer; clicked => { root.activated(); } }
 }
 
 component QuotaItem inherits Rectangle {
     in property <Service> service;
-    callback selected();
-    height: 102px;
-    width: 88px;
-    background: hit.has-hover ? #2b3036 : transparent;
-    border-radius: 30px;
-    animate background { duration: 130ms; }
+    in property <bool> animated: true;
+    callback activated();
+    height: 76px;
+    width: 56px;
+    border-radius: 26px;
+    background: hit.has-hover ? #272c32 : transparent;
+    animate background { duration: root.animated ? 160ms : 0ms; easing: ease-out; }
 
-    ring := Rectangle {
+    Rectangle {
         x: (parent.width - self.width) / 2;
-        y: 9px;
-        width: hit.has-hover ? 58px : 54px;
-        height: hit.has-hover ? 58px : 54px;
+        y: 4px;
+        width: hit.has-hover ? 46px : 44px;
+        height: hit.has-hover ? 46px : 44px;
         border-radius: self.width / 2;
-        background: #1c2026;
+        background: #1d2127;
         border-width: 4px;
-        border-color: #383d45;
-        animate width, height { duration: 180ms; easing: ease-out; }
+        border-color: hit.has-hover ? #4b515a : #30363e;
+        animate width, height, border-color { duration: root.animated ? 170ms : 0ms; easing: ease-out; }
 
         Path {
-            x: 0px; y: 0px;
             width: parent.width;
             height: parent.height;
             commands: root.service.arc;
             stroke: root.service.accent;
-            stroke-width: 4px;
+            stroke-width: 5px;
             fill: transparent;
         }
         Rectangle {
@@ -69,11 +71,11 @@ component QuotaItem inherits Rectangle {
             width: parent.width - 20px;
             height: parent.height - 20px;
             border-radius: self.width / 2;
-            background: root.service.accent.darker(38%);
+            background: root.service.accent.darker(34%);
             Text {
                 text: root.service.symbol;
-                color: #f8f5ef;
-                font-size: root.service.symbol == "w" ? 22px : 18px;
+                color: #fcfcfb;
+                font-size: root.service.symbol == "w" ? 15px : 16px;
                 font-weight: 700;
                 horizontal-alignment: center;
                 vertical-alignment: center;
@@ -81,31 +83,30 @@ component QuotaItem inherits Rectangle {
         }
     }
     Text {
-        y: 72px; height: 23px;
+        y: 51px;
         width: parent.width;
+        height: 21px;
         text: root.service.percent + "%";
-        color: #f0f2f5;
-        font-size: 18px;
+        color: #eef0f1;
+        font-size: 13px;
         font-weight: 700;
         horizontal-alignment: center;
     }
-    hit := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.selected(); }
-    }
+    hit := TouchArea { mouse-cursor: pointer; clicked => { root.activated(); } }
 }
 
 export component CapsuleWindow inherits Window {
     title: "Wacu";
-    width: 106px;
+    width: 76px;
     in property <int> visible-count: 3;
     in-out property <bool> revealed: false;
-    height: 142px + 102px * (visible-count == 0 ? 1 : visible-count);
+    in property <bool> animated: true;
+    in property <float> surface-opacity: 0.95;
+    height: 96px + 76px * (visible-count == 0 ? 1 : visible-count);
     background: transparent;
     no-frame: true;
     always-on-top: true;
     icon: @image-url("../assets/tray.svg");
-
     in property <[Service]> services;
     in property <bool> is-pinned: false;
     callback open-service(int);
@@ -113,56 +114,43 @@ export component CapsuleWindow inherits Window {
     callback toggle-mode();
     callback start-drag();
 
-    // Transparent window, opaque capsule. No browser surface.
     shell := Rectangle {
-        x: 5px; y: 5px;
+        x: root.revealed ? 5px : 8px;
+        y: root.revealed ? 4px : 11px;
         width: parent.width - 10px;
-        height: parent.height - 10px;
-        border-radius: 48px;
-        background: #15171b;
-        opacity: root.revealed ? 1 : 0;
-        animate opacity { duration: 170ms; easing: ease-out; }
-        border-color: #3a3e42;
+        height: parent.height - 8px;
+        border-radius: 34px;
+        background: @linear-gradient(90deg, #202327 0%, #101215 52%, #181a1e 100%);
+        border-color: #34383c;
         border-width: 1px;
-        drop-shadow-blur: 8px;
-        drop-shadow-color: #40000000;
-        drop-shadow-offset-y: 3px;
+        opacity: root.revealed ? root.surface-opacity : 0;
+        drop-shadow-blur: 11px;
+        drop-shadow-color: #60000000;
+        drop-shadow-offset-y: 4px;
+        animate x, y, opacity { duration: root.animated ? 185ms : 0ms; easing: ease-out; }
 
         VerticalLayout {
-            padding-top: 13px;
-            padding-bottom: 40px;
+            padding-top: 9px;
+            padding-bottom: 12px;
             padding-left: 4px;
             padding-right: 4px;
-            spacing: 4px;
+            spacing: 1px;
             alignment: center;
 
             Rectangle {
-                height: 36px;
-                width: 85px;
+                width: 54px;
+                height: 22px;
                 background: transparent;
-                Text {
-                    y: 1px;
-                    width: parent.width;
-                    text: "●";
-                    color: #89dab9;
-                    font-size: 11px;
-                    horizontal-alignment: center;
+                Rectangle {
+                    width: 13px; height: 3px; x: (parent.width - self.width) / 2; y: 0px;
+                    border-radius: 2px; background: #8cd4b4;
                 }
                 Text {
-                    y: 8px;
-                    width: parent.width;
+                    y: 2px; width: parent.width; height: 18px;
                     text: "w";
-                    color: #c8e6d9;
-                    font-size: 20px;
+                    font-size: 16px;
                     font-weight: 700;
-                    horizontal-alignment: center;
-                }
-                Text {
-                    y: 29px;
-                    width: parent.width;
-                    text: "演示";
-                    color: #89968f;
-                    font-size: 9px;
+                    color: #d9efe1;
                     horizontal-alignment: center;
                 }
                 TouchArea {
@@ -175,227 +163,511 @@ export component CapsuleWindow inherits Window {
                     }
                 }
             }
-            Rectangle { width: 35px; height: 1px; background: #35383e; horizontal-stretch: 0; }
-
-            if root.visible-count == 0: Text {
-                height: 85px;
-                text: "尚未启用\n监控服务";
-                color: #929a9b;
-                font-size: 11px;
-                horizontal-alignment: center;
-                vertical-alignment: center;
+            Rectangle { width: 29px; height: 1px; background: #343940; horizontal-stretch: 0; }
+            if root.visible-count == 0: Rectangle {
+                height: 76px; width: 55px; background: transparent;
+                Text {
+                    width: parent.width; height: parent.height;
+                    text: "未启用\n服务";
+                    color: #89918f;
+                    font-size: 11px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
             }
-
             for service in root.services: QuotaItem {
                 service: service;
-                selected => { root.open-service(service.source-index); }
+                animated: root.animated;
+                activated => { root.open-service(service.source-index); }
             }
-
-            Rectangle { width: 35px; height: 1px; background: #35383e; horizontal-stretch: 0; }
+            Rectangle { width: 29px; height: 1px; background: #343940; horizontal-stretch: 0; }
             HorizontalLayout {
-                height: 37px;
+                height: 34px;
+                spacing: 2px;
                 alignment: center;
-                spacing: 5px;
-                MiniAction {
-                    symbol: root.is-pinned ? "◇" : "◆";
-                    clicked => { root.toggle-mode(); }
+                IconButton {
+                    glyph: root.is-pinned ? "◇" : "⌁";
+                    selected: root.is-pinned;
+                    animated: root.animated;
+                    activated => { root.toggle-mode(); }
                 }
-                MiniAction {
-                    symbol: "⚙";
-                    clicked => { root.open-settings(); }
-                }
+                IconButton { glyph: "⚙"; animated: root.animated; activated => { root.open-settings(); } }
+            }
+            Text {
+                height: 11px;
+                text: "DEMO";
+                font-size: 8px;
+                color: #77807d;
+                horizontal-alignment: center;
             }
         }
     }
 }
 
-component QuotaBar inherits Rectangle {
-    in property <string> label;
+component FillTrack inherits Rectangle {
     in property <int> value;
-    in property <string> hint;
     in property <color> accent;
-    height: 66px;
-    background: transparent;
-    Text { x: 0px; y: 0px; text: root.label; color: #e0e4e8; font-size: 13px; }
-    Text { x: parent.width - 48px; y: 0px; width: 48px; text: root.value + "%"; color: #ecf1ed; font-size: 13px; horizontal-alignment: right; }
+    height: 8px;
+    border-radius: 4px;
+    background: #343940;
     Rectangle {
-        y: 26px; width: parent.width; height: 7px; border-radius: 4px; background: #303740;
-        Rectangle {
-            height: parent.height;
-            width: parent.width * (root.value / 100.0);
-            background: root.accent;
-            border-radius: 4px;
-            animate width { duration: 550ms; easing: ease-out; }
-        }
+        width: parent.width * (root.value / 100.0);
+        height: parent.height;
+        background: root.accent;
+        border-radius: 4px;
+        animate width { duration: 420ms; easing: ease-out; }
     }
-    Text { y: 40px; text: root.hint; color: #919ba6; font-size: 11px; }
+}
+
+component InfoLine inherits Rectangle {
+    in property <string> glyph;
+    in property <string> label;
+    in property <string> value;
+    height: 31px;
+    background: transparent;
+    HorizontalLayout {
+        spacing: 8px;
+        alignment: center;
+        Text { width: 21px; text: root.glyph; color: #acb3ba; font-size: 13px; }
+        Text { text: root.label; color: #aab2bc; font-size: 12px; horizontal-stretch: 1; }
+        Text { text: root.value; color: #e7e9ed; font-size: 12px; horizontal-alignment: right; }
+    }
+}
+
+component Bar inherits Rectangle {
+    in property <float> fraction;
+    in property <color> tint;
+    height: 82px;
+    width: 8px;
+    background: transparent;
+    Rectangle {
+        width: parent.width;
+        height: root.fraction * parent.height;
+        y: parent.height - self.height;
+        border-radius: 3px;
+        background: root.tint;
+        animate height { duration: 280ms; easing: ease-out; }
+    }
 }
 
 export component DetailWindow inherits Window {
-    width: 342px; height: 504px;
-    no-frame: true; always-on-top: true; background: transparent;
-    title: "Wacu · 额度详情";
+    title: "Wacu · 用量详情";
+    width: 302px;
+    height: expanded ? 596px : 365px;
+    no-frame: true;
+    always-on-top: true;
+    background: transparent;
     in property <Service> selected-service;
+    in-out property <bool> expanded: false;
+    in-out property <int> selected-period: 0;
     callback close-detail();
+    callback expand-detail();
     callback refresh();
 
     Rectangle {
-        x: 5px; y: 5px; width: parent.width - 10px; height: parent.height - 10px;
-        background: #191d23; border-radius: 23px; border-width: 1px; border-color: #394047;
-        drop-shadow-blur: 9px; drop-shadow-color: #44000000;
+        x: 5px; y: 5px;
+        width: parent.width - 10px; height: parent.height - 10px;
+        background: @linear-gradient(90deg, #202429 0%, #171a1e 100%);
+        border-width: 1px; border-color: #3a4147;
+        border-radius: 17px;
+        drop-shadow-blur: 13px; drop-shadow-color: #65000000;
+        drop-shadow-offset-y: 5px;
+
         VerticalLayout {
-            padding: 20px; spacing: 16px;
+            padding: 15px;
+            spacing: 10px;
             HorizontalLayout {
-                height: 32px;
-                Text { text: "Wacu   /   用量详情"; color: #e9f1ed; font-weight: 600; font-size: 13px; }
-                Rectangle { horizontal-stretch: 1; }
-                MiniAction { symbol: "×"; clicked => { root.close-detail(); } }
+                height: 35px; spacing: 10px; alignment: center;
+                Rectangle {
+                    width: 31px; height: 31px; border-radius: 9px;
+                    background: root.selected-service.accent.darker(30%);
+                    Text {
+                        text: root.selected-service.symbol; color: #fffdfa;
+                        font-size: 17px; font-weight: 700;
+                        horizontal-alignment: center; vertical-alignment: center;
+                    }
+                }
+                Text {
+                    text: root.selected-service.label;
+                    color: #f1f2f3;
+                    font-size: 15px; font-weight: 650;
+                    horizontal-stretch: 1;
+                }
+                IconButton { glyph: "×"; activated => { root.close-detail(); } }
+            }
+            Rectangle { height: 1px; background: #30353b; }
+            if root.expanded: HorizontalLayout {
+                height: 32px; spacing: 5px;
+                for name[idx] in ["今日", "7天", "30天"]: Rectangle {
+                    background: root.selected-period == idx ? #42484f : #282d33;
+                    border-radius: 8px;
+                    HorizontalLayout {
+                        padding-left: 10px; padding-right: 10px; alignment: center;
+                        Text { text: name; color: root.selected-period == idx ? #f5f5f6 : #a4acb3; font-size: 11px; }
+                    }
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.selected-period = idx; }
+                    }
+                }
+            }
+            Text {
+                text: "用量进度";
+                color: #d9dfe3; font-size: 12px;
+                font-weight: 600;
             }
             HorizontalLayout {
-                height: 52px; spacing: 12px;
-                Rectangle {
-                    width: 48px; height: 48px; border-radius: 15px; background: root.selected-service.accent.darker(48%);
-                    Text { text: root.selected-service.symbol; color: #f8f9f4; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
+                height: 45px;
+                alignment: end;
+                Text {
+                    text: root.selected-service.percent + "%";
+                    font-size: 36px; font-weight: 700; color: #fafbfb;
+                    horizontal-stretch: 1;
                 }
+                Text {
+                    text: "剩余 · 演示";
+                    color: #a8b0b6; font-size: 11px;
+                    vertical-alignment: bottom;
+                }
+            }
+            FillTrack { value: root.selected-service.percent; accent: root.selected-service.accent; }
+            if root.expanded: Rectangle {
+                height: 110px; background: #1a1f24; border-radius: 9px;
                 VerticalLayout {
-                    alignment: center; spacing: 3px;
-                    Text { text: root.selected-service.label; color: #f6f7f9; font-weight: 700; font-size: 18px; }
-                    Text { text: root.selected-service.subtitle; color: #a1aab4; font-size: 11px; }
+                    padding: 10px; spacing: 5px;
+                    HorizontalLayout {
+                        height: 82px; spacing: 5px; alignment: center;
+                        for fraction[idx] in [0.13, 0.24, 0.18, 0.43, 0.32, 0.16, 0.58, 0.3, 0.25, 0.7, 0.48, 0.81, 0.56, 0.35, 0.14, 0.2]: Bar {
+                            fraction: root.selected-period == 0 ? fraction : (root.selected-period == 1 ? (0.85 - fraction * 0.55) : (0.25 + fraction * 0.7));
+                            tint: root.selected-service.accent;
+                        }
+                    }
+                    Text { text: "0时                     12时                     24时"; color: #77818b; font-size: 9px; }
                 }
             }
             Rectangle {
-                height: 119px; background: #28322f; border-radius: 18px;
+                height: 98px;
+                border-radius: 11px;
+                background: #262b31;
+                border-width: 1px; border-color: #353b43;
                 VerticalLayout {
-                    padding: 16px; spacing: 3px;
-                    Text { text: "当前剩余额度"; color: #bed0c7; font-size: 12px; }
-                    Text { text: root.selected-service.percent + "%"; font-size: 45px; font-weight: 700; color: #dff7e9; }
-                    Text { text: "演示数据 · 尚未连接账户"; font-size: 10px; color: #aec8bc; }
+                    padding-left: 11px; padding-right: 11px; padding-top: 5px;
+                    InfoLine { glyph: "i"; label: "额度类型"; value: root.selected-service.remaining; }
+                    InfoLine { glyph: "%"; label: "剩余比例"; value: root.selected-service.percent + "%"; }
+                    InfoLine { glyph: "+"; label: "更新状态"; value: "未连接（演示）"; }
                 }
             }
-            VerticalLayout {
-                spacing: 8px;
-                QuotaBar {
-                    width: parent.width;
-                    label: root.selected-service.remaining;
-                    value: root.selected-service.percent;
-                    hint: root.selected-service.reset;
-                    accent: root.selected-service.accent;
-                }
-                Rectangle {
-                    height: 55px;
-                    border-radius: 11px;
-                    background: #23282f;
-                    Text { text: "真实额度接口将在下一阶段接入"; color: #9aa5aa; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+            if root.expanded: Rectangle {
+                height: 47px; border-radius: 9px; background: #20272c;
+                Text {
+                    text: "图表为演示样本，尚未接入真实历史记录";
+                    color: #a8b2bc; font-size: 10px;
+                    horizontal-alignment: center; vertical-alignment: center;
                 }
             }
             Rectangle { vertical-stretch: 1; }
             Rectangle {
-                height: 39px; border-radius: 12px; background: #293d35;
-                Text { text: "刷新数据（演示模式）"; color: #b8dec8; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
-                TouchArea { mouse-cursor: pointer; clicked => { root.refresh(); } }
+                height: 39px;
+                border-radius: 10px;
+                background: click.has-hover ? #3d4849 : #313b3e;
+                animate background { duration: 150ms; }
+                Text {
+                    text: root.expanded ? "刷新（演示模式）" : "查看详细用量    ›";
+                    color: #e6efea; font-size: 12px; font-weight: 600;
+                    horizontal-alignment: center; vertical-alignment: center;
+                }
+                click := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        if (!root.expanded) { root.expand-detail(); }
+                        else { root.refresh(); }
+                    }
+                }
             }
         }
     }
 }
 
-component SettingToggle inherits Rectangle {
+component SettingSwitch inherits Rectangle {
     in property <string> label;
-    in property <string> subtitle;
-    in-out property <bool> enabled;
-    callback toggled(bool);
-    height: 62px;
-    background: #21262d;
-    border-radius: 14px;
-    HorizontalLayout {
-        width: parent.width;
-        height: parent.height;
-        padding-left: 15px; padding-right: 15px; alignment: center; spacing: 6px;
-        VerticalLayout {
-            horizontal-stretch: 1;
-            spacing: 4px; alignment: center;
-            Text { text: root.label; font-size: 13px; color: #f0f2f4; }
-            Text { text: root.subtitle; font-size: 11px; color: #919ca6; }
-        }
+    in property <string> hint;
+    in property <bool> checked;
+    callback changed(bool);
+    height: 61px;
+    background: #202428;
+    border-radius: 10px;
+    Text {
+        x: 14px; y: 10px; width: parent.width - 83px; height: 20px;
+        text: root.label; color: #eceff1; font-size: 12px; font-weight: 600;
+        horizontal-alignment: left;
+    }
+    Text {
+        x: 14px; y: 32px; width: parent.width - 83px; height: 17px;
+        text: root.hint; color: #929ba4; font-size: 10px;
+        horizontal-alignment: left;
+    }
+    Rectangle {
+        x: parent.width - 52px; y: 20px;
+        width: 38px; height: 21px; border-radius: 11px;
+        background: root.checked ? #2885f2 : #545c65;
+        animate background { duration: 150ms; easing: ease-out; }
         Rectangle {
-            width: 38px; height: 22px; border-radius: 12px;
-            background: root.enabled ? #8bd2b6 : #535963;
-            animate background { duration: 160ms; }
-            Rectangle {
-                x: root.enabled ? 19px : 3px;
-                y: 3px; width: 16px; height: 16px; border-radius: 8px;
-                background: #f0f4f1;
-                animate x { duration: 140ms; easing: ease-out; }
-            }
+            width: 16px; height: 16px;
+            x: root.checked ? 19px : 3px; y: 2.5px;
+            border-radius: 8px; background: #f8fafb;
+            animate x { duration: 150ms; easing: ease-out; }
         }
     }
-    TouchArea { mouse-cursor: pointer; clicked => { root.toggled(!root.enabled); } }
+    TouchArea { mouse-cursor: pointer; clicked => { root.changed(!root.checked); } }
+}
+
+component SideNav inherits Rectangle {
+    in property <string> label;
+    in property <string> glyph;
+    in property <bool> selected;
+    callback clicked();
+    height: 41px;
+    border-radius: 8px;
+    background: selected ? #213e58 : (hit.has-hover ? #272e35 : transparent);
+    border-width: selected ? 1px : 0px;
+    border-color: #356f9a;
+    animate background { duration: 150ms; }
+    HorizontalLayout {
+        padding-left: 12px; spacing: 11px; alignment: center;
+        Text { width: 21px; text: root.glyph; color: root.selected ? #86caff : #a9b2ba; font-size: 17px; }
+        Text { text: root.label; color: root.selected ? #e4f4ff : #c9ced3; font-size: 12px; font-weight: root.selected ? 600 : 400; }
+        Rectangle { horizontal-stretch: 1; }
+    }
+    hit := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+component SectionTitle inherits Rectangle {
+    in property <string> label;
+    height: 29px;
+    Text {
+        width: parent.width; height: parent.height;
+        text: root.label; color: #eff1f2; font-size: 15px; font-weight: 650;
+        horizontal-alignment: left;
+    }
+}
+
+component ActionRow inherits Rectangle {
+    in property <string> caption;
+    callback clicked();
+    height: 40px;
+    border-radius: 10px;
+    background: hit.has-hover ? #39434a : #2b3238;
+    border-width: 1px; border-color: #3f4851;
+    animate background { duration: 140ms; }
+    Text { text: root.caption; color: #dde4e8; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+    hit := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
 }
 
 export component SettingsWindow inherits Window {
     title: "Wacu · 设置";
-    width: 480px; height: 620px;
-    background: #181b21;
+    width: 608px;
+    height: 490px;
+    background: #17191d;
+    no-frame: true;
     in-out property <bool> pinned-mode: false;
     in-out property <bool> show-codex: true;
     in-out property <bool> show-claude: true;
     in-out property <bool> show-workbuddy: true;
+    in-out property <bool> animations-on: true;
+    in-out property <float> opacity-percent: 95;
+    in-out property <int> selected-page: 0;
     callback set-pinned(bool);
     callback toggle-service(int, bool);
+    callback close-settings();
+    callback start-settings-drag();
+    callback set-animations(bool);
+    callback set-opacity(float);
     callback reset-position();
 
     VerticalLayout {
-        padding: 25px; spacing: 18px;
-        HorizontalLayout {
-            height: 64px; spacing: 12px;
-            Rectangle {
-                width: 52px; height: 52px; border-radius: 17px; background: #293e35;
-                Text { text: "w"; font-size: 31px; font-weight: 700; color: #a0e3c2; horizontal-alignment: center; vertical-alignment: center; }
-            }
-            VerticalLayout {
-                spacing: 3px; alignment: center;
-                Text { text: "Wacu"; color: #f3f5f6; font-size: 24px; font-weight: 700; }
-                Text { text: "A little watcher for your AI."; font-size: 11px; color: #9baea4; }
-            }
-        }
-        Text { text: "显示模式"; font-size: 14px; font-weight: 600; color: #e7efe9; }
-        HorizontalLayout {
-            spacing: 12px; height: 95px;
-            Rectangle {
-                background: !root.pinned-mode ? #294239 : #24282f;
-                border-color: !root.pinned-mode ? #80c5a8 : #39414a;
-                border-width: 1px; border-radius: 15px;
-                horizontal-stretch: 1;
-                VerticalLayout {
-                    padding: 15px; spacing: 9px;
-                    Text { text: "▣   点击弹出"; color: #eff8f3; font-size: 14px; font-weight: 600; }
-                    Text { text: "点击托盘，失焦收起"; color: #a5b3ac; font-size: 11px; }
-                }
-                TouchArea { mouse-cursor: pointer; clicked => { root.set-pinned(false); } }
-            }
-            Rectangle {
-                background: root.pinned-mode ? #294239 : #24282f;
-                border-color: root.pinned-mode ? #80c5a8 : #39414a;
-                border-width: 1px; border-radius: 15px;
-                horizontal-stretch: 1;
-                VerticalLayout {
-                    padding: 15px; spacing: 9px;
-                    Text { text: "◇   常驻悬浮"; color: #eff8f3; font-size: 14px; font-weight: 600; }
-                    Text { text: "始终置顶，可以拖动"; color: #a5b3ac; font-size: 11px; }
-                }
-                TouchArea { mouse-cursor: pointer; clicked => { root.set-pinned(true); } }
-            }
-        }
-        Text { text: "监控服务"; font-size: 14px; color: #e7efe9; font-weight: 600; }
-        SettingToggle { label: "Codex"; subtitle: "OpenAI · ChatGPT"; enabled: root.show-codex; toggled(value) => { root.toggle-service(0, value); } }
-        SettingToggle { label: "Claude Code"; subtitle: "Anthropic · Claude"; enabled: root.show-claude; toggled(value) => { root.toggle-service(1, value); } }
-        SettingToggle { label: "WorkBuddy"; subtitle: "Credits · 积分"; enabled: root.show-workbuddy; toggled(value) => { root.toggle-service(2, value); } }
+        spacing: 0px;
         Rectangle {
-            height: 38px; background: #292f32; border-radius: 11px;
-            Text { text: "↺   恢复胶囊位置"; color: #bfdfd0; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
-            TouchArea { mouse-cursor: pointer; clicked => { root.reset-position(); } }
+            height: 51px; background: #1b1e22;
+            HorizontalLayout {
+                width: parent.width - 48px;
+                height: parent.height;
+                padding-left: 21px; padding-right: 9px; spacing: 10px; alignment: center;
+                Text { text: "⚙"; color: #e4e8eb; font-size: 21px; }
+                Text { text: "Wacu 设置"; color: #f0f1f3; font-size: 15px; font-weight: 650; }
+                Rectangle { horizontal-stretch: 1; }
+                Text { text: "原生轻量版"; color: #7e9294; font-size: 11px; }
+            }
+            TouchArea {
+                width: parent.width - 49px;
+                height: parent.height;
+                mouse-cursor: grab;
+                pointer-event(event) => {
+                    if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                        root.start-settings-drag();
+                    }
+                }
+            }
+            IconButton {
+                x: parent.width - 38px; y: 10px;
+                glyph: "×";
+                activated => { root.close-settings(); }
+            }
         }
-        Rectangle { vertical-stretch: 1; }
-        Text { text: "0.2.0  ·  Slint 原生版  ·  当前全部为演示额度"; font-size: 11px; color: #89948e; horizontal-alignment: center; }
+        Rectangle { height: 1px; background: #2e3439; }
+        HorizontalLayout {
+            spacing: 0px;
+            Rectangle {
+                width: 154px; background: #1b1e22;
+                VerticalLayout {
+                    padding-top: 16px; padding-left: 12px; padding-right: 12px; spacing: 5px;
+                    SideNav { label: "常规"; glyph: "⚙"; selected: root.selected-page == 0; clicked => { root.selected-page = 0; } }
+                    SideNav { label: "服务管理"; glyph: "≡"; selected: root.selected-page == 1; clicked => { root.selected-page = 1; } }
+                    SideNav { label: "外观"; glyph: "O"; selected: root.selected-page == 2; clicked => { root.selected-page = 2; } }
+                    SideNav { label: "行为"; glyph: "›"; selected: root.selected-page == 3; clicked => { root.selected-page = 3; } }
+                    SideNav { label: "关于"; glyph: "i"; selected: root.selected-page == 4; clicked => { root.selected-page = 4; } }
+                    Rectangle { vertical-stretch: 1; }
+                    Text { text: "Wacu 0.2"; color: #818b94; font-size: 10px; }
+                }
+            }
+            Rectangle { width: 1px; background: #30343a; }
+            Rectangle {
+                background: #17191d;
+                horizontal-stretch: 1;
+                VerticalLayout {
+                    padding-top: 21px; padding-bottom: 19px;
+                    padding-left: 21px; padding-right: 22px;
+                    spacing: 12px;
+                    if root.selected-page == 0: VerticalLayout {
+                        spacing: 12px;
+                        SectionTitle { label: "常规设置"; }
+                        SettingSwitch {
+                            label: "常驻显示";
+                            hint: "在桌面侧边显示用量胶囊";
+                            checked: root.pinned-mode;
+                            changed(value) => { root.set-pinned(value); }
+                        }
+                        Rectangle {
+                            height: 58px; border-radius: 10px; background: #202428;
+                            HorizontalLayout {
+                                padding-left: 14px; padding-right: 12px; alignment: center;
+                                VerticalLayout {
+                                    spacing: 4px; alignment: center; horizontal-stretch: 1;
+                                    Text { text: "开机启动"; color: #858e98; font-size: 12px; }
+                                    Text { text: "尚未实现，后续版本接入"; color: #6c7984; font-size: 10px; }
+                                }
+                                Text { text: "规划中"; color: #74808a; font-size: 10px; }
+                            }
+                        }
+                        ActionRow { caption: "恢复胶囊默认位置"; clicked => { root.reset-position(); } }
+                    }
+                    if root.selected-page == 1: VerticalLayout {
+                        spacing: 12px;
+                        SectionTitle { label: "服务管理"; }
+                        Text { text: "选择需要显示在胶囊中的 AI 服务"; color: #89959d; font-size: 11px; }
+                        SettingSwitch {
+                            label: "Codex"; hint: "OpenAI · ChatGPT";
+                            checked: root.show-codex;
+                            changed(value) => { root.toggle-service(0, value); }
+                        }
+                        SettingSwitch {
+                            label: "Claude Code"; hint: "Anthropic · Claude";
+                            checked: root.show-claude;
+                            changed(value) => { root.toggle-service(1, value); }
+                        }
+                        SettingSwitch {
+                            label: "WorkBuddy"; hint: "积分额度";
+                            checked: root.show-workbuddy;
+                            changed(value) => { root.toggle-service(2, value); }
+                        }
+                        Text { text: "目前各项用量为演示数据"; color: #84918c; font-size: 11px; }
+                    }
+                    if root.selected-page == 2: VerticalLayout {
+                        spacing: 12px;
+                        SectionTitle { label: "外观"; }
+                        Text { text: "胶囊透明度"; color: #e5e8eb; font-size: 12px; }
+                        Rectangle {
+                            height: 58px; border-radius: 10px; background: #202428;
+                            HorizontalLayout {
+                                padding-left: 14px; padding-right: 14px; spacing: 10px; alignment: center;
+                                Slider {
+                                    horizontal-stretch: 1;
+                                    minimum: 65;
+                                    maximum: 100;
+                                    value: root.opacity-percent;
+                                    changed => { root.set-opacity(self.value); }
+                                }
+                                Text {
+                                    width: 40px;
+                                    text: root.opacity-percent + "%";
+                                    color: #ecf3fa; font-size: 12px; horizontal-alignment: right;
+                                }
+                            }
+                        }
+                        Text { text: "透明度仅作用于胶囊，不影响设置与详情窗口。"; color: #8d99a2; font-size: 11px; }
+                        Rectangle { height: 12px; }
+                        SectionTitle { label: "配色"; }
+                        HorizontalLayout {
+                            height: 48px; spacing: 10px; alignment: center;
+                            Rectangle { width: 35px; height: 35px; border-radius: 18px; background: #85d7b5; }
+                            Rectangle { width: 35px; height: 35px; border-radius: 18px; background: #f2977c; }
+                            Rectangle { width: 35px; height: 35px; border-radius: 18px; background: #b3a2ed; }
+                            Text { text: "服务独立配色"; color: #abb5bc; font-size: 11px; }
+                        }
+                    }
+                    if root.selected-page == 3: VerticalLayout {
+                        spacing: 12px;
+                        SectionTitle { label: "行为"; }
+                        SettingSwitch {
+                            label: "显示动画";
+                            hint: "启用胶囊弹出与悬停过渡";
+                            checked: root.animations-on;
+                            changed(value) => { root.set-animations(value); }
+                        }
+                        Rectangle {
+                            height: 58px; border-radius: 10px; background: #202428;
+                            Text {
+                                x: 14px; y: 10px; width: parent.width - 90px;
+                                text: "贴边隐藏"; color: #858e98; font-size: 12px;
+                            }
+                            Text {
+                                x: 14px; y: 31px; width: parent.width - 90px;
+                                text: "未来版本将支持靠近屏幕边缘收起"; color: #6c7984; font-size: 10px;
+                            }
+                            Text {
+                                x: parent.width - 65px; y: 22px; width: 60px;
+                                text: "规划中"; color: #74808a; font-size: 10px;
+                            }
+                        }
+                        Text {
+                            text: "点击弹出模式下，胶囊失去焦点后会自动隐藏。";
+                            color: #89959d; font-size: 11px;
+                        }
+                    }
+                    if root.selected-page == 4: VerticalLayout {
+                        spacing: 16px;
+                        SectionTitle { label: "关于 Wacu"; }
+                        Text { text: "Wacu · A little watcher for your AI."; color: #e5edec; font-size: 14px; }
+                        Text { text: "版本 0.2.0 · Rust + Slint + Win32"; color: #a3acb5; font-size: 12px; }
+                        Text {
+                            text: "轻量、简洁、不打扰。\n当前是本地界面演示，尚未连接真实用量接口。";
+                            color: #929da6; font-size: 12px;
+                            wrap: word-wrap;
+                        }
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                }
+            }
+        }
+        Rectangle { height: 1px; background: #2f3439; }
+        Rectangle {
+            height: 33px; background: #1b1e22;
+            HorizontalLayout {
+                padding-left: 17px; padding-right: 18px; alignment: center;
+                Text { text: "Wacu v0.2.0"; color: #859098; font-size: 10px; }
+                Rectangle { horizontal-stretch: 1; }
+                Text { text: "演示 · 本地运行"; color: #85b59f; font-size: 10px; }
+            }
+        }
     }
 }
 

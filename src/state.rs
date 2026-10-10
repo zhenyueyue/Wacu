@@ -14,6 +14,8 @@ pub struct Preferences {
     pub mode: Mode,
     pub saved_position: Option<(i32, i32)>,
     pub shown: [bool; 3],
+    pub animations_enabled: bool,
+    pub opacity_percent: u8,
 }
 
 impl Default for Preferences {
@@ -22,6 +24,8 @@ impl Default for Preferences {
             mode: Mode::Popup,
             saved_position: None,
             shown: [true; 3],
+            animations_enabled: true,
+            opacity_percent: 95,
         }
     }
 }
@@ -60,5 +64,19 @@ mod tests {
         let prefs: Preferences = serde_json::from_str(r#"{"mode":"popup"}"#).unwrap();
         assert_eq!(prefs.mode, Mode::Popup);
         assert_eq!(prefs.shown, [true; 3]);
+        assert!(prefs.animations_enabled);
+        assert_eq!(prefs.opacity_percent, 95);
+    }
+
+    #[test]
+    fn visual_preferences_round_trip() {
+        let mut prefs = Preferences::default();
+        prefs.animations_enabled = false;
+        prefs.opacity_percent = 72;
+        let json = serde_json::to_string(&prefs).unwrap();
+        let restored: Preferences = serde_json::from_str(&json).unwrap();
+        assert!(!restored.animations_enabled);
+        assert_eq!(restored.opacity_percent, 72);
+        assert_eq!(restored.mode, Mode::Popup);
     }
 }

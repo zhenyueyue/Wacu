@@ -125,6 +125,10 @@ fn refresh_model(
     settings.set_show_workbuddy(prefs.shown[2]);
     settings.set_pinned_mode(prefs.mode == Mode::Pinned);
     capsule.set_is_pinned(prefs.mode == Mode::Pinned);
+    capsule.set_animated(prefs.animations_enabled);
+    capsule.set_surface_opacity(prefs.opacity_percent.clamp(65, 100) as f32 / 100.0);
+    settings.set_animations_on(prefs.animations_enabled);
+    settings.set_opacity_percent(prefs.opacity_percent.clamp(65, 100) as f32);
 }
 
 fn capsule_dimensions(capsule: &CapsuleWindow) -> (i32, i32) {
@@ -218,20 +222,10 @@ fn set_mode(
 
 fn show_settings(settings: &SettingsWindow) {
     let _ = settings.show();
-    let weak = settings.as_weak();
-    Timer::single_shot(Duration::from_millis(30), move || {
-        if let Some(settings) = weak.upgrade() {
-            platform_windows::use_dark_title_bar(settings.window());
-        }
-    });
+    platform_windows::activate(settings.window());
 }
 
-fn show_detail(detail: &DetailWindow, capsule: &CapsuleWindow, index: usize, prefs: &Preferences) {
-    if !prefs.shown[index] {
-        return;
-    }
-    detail.set_selected_service(service(index, true));
-    let _ = detail.show();
+fn position_detail(detail: &DetailWindow, capsule: &CapsuleWindow) {
     let cp = capsule.window().position();
     let cs = capsule.window().size();
     let ds = detail.window().size();
@@ -253,6 +247,17 @@ fn show_detail(detail: &DetailWindow, capsule: &CapsuleWindow, index: usize, pre
     detail
         .window()
         .set_position(PhysicalPosition::new(dest.x, dest.y));
+}
+
+fn show_detail(detail: &DetailWindow, capsule: &CapsuleWindow, index: usize, prefs: &Preferences) {
+    if !prefs.shown[index] {
+        return;
+    }
+    detail.set_selected_service(service(index, true));
+    detail.set_expanded(false);
+    detail.set_selected_period(0);
+    let _ = detail.show();
+    position_detail(detail, capsule);
     let weak = detail.as_weak();
     Timer::single_shot(Duration::from_millis(30), move || {
         if let Some(view) = weak.upgrade() {
@@ -264,6 +269,18 @@ fn show_detail(detail: &DetailWindow, capsule: &CapsuleWindow, index: usize, pre
 
 fn main() -> Result<(), Box<dyn Error>> {
     let initial = state::load();
+    #[cfg(debug_assertions)]
+    let mut initial = initial;
+    #[cfg(debug_assertions)]
+    let qa_view = std::env::var("WACU_QA_VIEW").unwrap_or_default();
+    #[cfg(debug_assertions)]
+    if matches!(
+        qa_view.as_str(),
+        "capsule" | "quick" | "detail" | "settings"
+    ) {
+        initial.mode = Mode::Pinned;
+        initial.shown = [true; 3];
+    }
     let preferences = Rc::new(RefCell::new(initial.clone()));
     let last_popup_open = Rc::new(Cell::new(Instant::now() - Duration::from_secs(3)));
 
@@ -385,6 +402,22 @@ fn main() -> Result<(), Box<dyn Error>> {
         // The UI is deliberately in demo mode. No network requests or credentials.
     });
     {
+        let weak = detail.as_weak();
+        let cap = capsule.as_weak();
+        detail.on_expand_detail(move || {
+            if let (Some(detail), Some(capsule)) = (weak.upgrade(), cap.upgrade()) {
+                detail.set_expanded(true);
+                let d = detail.as_weak();
+                let c = capsule.as_weak();
+                Timer::single_shot(Duration::from_millis(45), move || {
+                    if let (Some(d), Some(c)) = (d.upgrade(), c.upgrade()) {
+                        position_detail(&d, &c);
+                    }
+                });
+            }
+        });
+    }
+    {
         let cap = capsule.as_weak();
         let settings_weak = settings.as_weak();
         let pref = preferences.clone();
@@ -418,6 +451,59 @@ fn main() -> Result<(), Box<dyn Error>> {
                         refresh_model(&model, &c, &s, &value);
                     }
                 }
+            }
+        });
+    }
+    {
+        let weak = settings.as_weak();
+        settings.on_close_settings(move || {
+            if let Some(s) = weak.upgrade() {
+                let _ = s.hide();
+            }
+        });
+    }
+    {
+        let weak = settings.as_weak();
+        settings.on_start_settings_drag(move || {
+            if let Some(s) = weak.upgrade() {
+                platform_windows::begin_drag(s.window());
+            }
+        });
+    }
+    {
+        let cap = capsule.as_weak();
+        let pref = preferences.clone();
+        let settings_weak = settings.as_weak();
+        settings.on_set_animations(move |enabled| {
+            let mut value = pref.borrow_mut();
+            value.animations_enabled = enabled;
+            if let Err(error) = state::save(&value) {
+                eprintln!("Saving animations: {error}");
+            }
+            if let Some(c) = cap.upgrade() {
+                c.set_animated(enabled);
+            }
+            if let Some(s) = settings_weak.upgrade() {
+                s.set_animations_on(enabled);
+            }
+        });
+    }
+    {
+        let cap = capsule.as_weak();
+        let pref = preferences.clone();
+        let settings_weak = settings.as_weak();
+        settings.on_set_opacity(move |percent| {
+            let percent = percent.round().clamp(65.0, 100.0) as u8;
+            let mut value = pref.borrow_mut();
+            value.opacity_percent = percent;
+            if let Err(error) = state::save(&value) {
+                eprintln!("Saving opacity: {error}");
+            }
+            if let Some(c) = cap.upgrade() {
+                c.set_surface_opacity(percent as f32 / 100.0);
+            }
+            if let Some(s) = settings_weak.upgrade() {
+                s.set_opacity_percent(percent as f32);
             }
         });
     }
@@ -475,6 +561,71 @@ fn main() -> Result<(), Box<dyn Error>> {
         show_capsule(&capsule, &initial, None);
     }
 
+    // Debug-only visual QA; does not exist in the Release application.
+    #[cfg(debug_assertions)]
+    if !qa_view.is_empty() {
+        match qa_view.as_str() {
+            "quick" | "detail" => {
+                show_detail(&detail, &capsule, 1, &initial);
+                if qa_view == "detail" {
+                    detail.set_expanded(true);
+                    let d = detail.as_weak();
+                    let c = capsule.as_weak();
+                    Timer::single_shot(Duration::from_millis(150), move || {
+                        if let (Some(d), Some(c)) = (d.upgrade(), c.upgrade()) {
+                            position_detail(&d, &c);
+                        }
+                    });
+                }
+            }
+            "settings" => show_settings(&settings),
+            _ => {}
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    if matches!(
+        qa_view.as_str(),
+        "capsule" | "quick" | "detail" | "settings"
+    ) {
+        let mode = qa_view.clone();
+        let c = capsule.as_weak();
+        let d = detail.as_weak();
+        let s = settings.as_weak();
+        Timer::single_shot(Duration::from_millis(900), move || {
+            let snapshot = match mode.as_str() {
+                "capsule" => c
+                    .upgrade()
+                    .and_then(|window| window.window().take_snapshot().ok()),
+                "quick" | "detail" => d
+                    .upgrade()
+                    .and_then(|window| window.window().take_snapshot().ok()),
+                "settings" => s
+                    .upgrade()
+                    .and_then(|window| window.window().take_snapshot().ok()),
+                _ => None,
+            };
+            if let Some(snapshot) = snapshot {
+                let result = (|| -> Result<(), Box<dyn Error>> {
+                    let mut encoder = png::Encoder::new(
+                        std::fs::File::create(format!("target/wacu-qa-{mode}.png"))?,
+                        snapshot.width(),
+                        snapshot.height(),
+                    );
+                    encoder.set_color(png::ColorType::Rgba);
+                    encoder.set_depth(png::BitDepth::Eight);
+                    encoder
+                        .write_header()?
+                        .write_image_data(snapshot.as_bytes())?;
+                    Ok(())
+                })();
+                if let Err(error) = result {
+                    eprintln!("Wacu preview snapshot failed: {error}");
+                }
+            }
+        });
+    }
+
     // Low-frequency housekeeping: no rendering or network polling during idle.
     let housekeeping = Timer::default();
     {
@@ -508,6 +659,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                     let _ = c.hide();
                 }
             } else {
+                #[cfg(debug_assertions)]
+                if std::env::var_os("WACU_QA_VIEW").is_some() {
+                    return;
+                }
                 let pos = c.window().position();
                 let current = (pos.x, pos.y);
                 if last_pos.borrow().as_ref() != Some(&current) {
