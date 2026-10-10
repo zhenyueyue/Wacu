@@ -46,6 +46,7 @@ component QuotaItem inherits Rectangle {
     callback activated();
     in property <int> size-mode: 1;
     property <length> ring-width: root.size-mode == 0 ? 3px : (root.size-mode == 1 ? 4px : 5px);
+    property <string> ring-path: "M 0 0 L 0 0 M 56 56 L 56 56 M 28 4 A 24 24 0 1 1 28 52 A 24 24 0 1 1 28 4";
     width: root.size-mode == 0 ? 40px : (root.size-mode == 1 ? 56px : 72px);
     height: root.size-mode == 0 ? 52px : (root.size-mode == 1 ? 70px : 84px);
     border-radius: root.width / 2;
@@ -58,9 +59,26 @@ component QuotaItem inherits Rectangle {
         height: self.width; border-radius: self.width / 2;
         background: transparent;
         animate width, height, y { duration: root.animated ? 100ms : 0ms; easing: ease-out; }
+        // Concentric translucent strokes soften the halo without raster assets.
+        for spread in [14, 12, 10, 8, 6, 4, 2]: Rectangle {
+            property <length> glow-spread: root.ring-width * spread / 4;
+            width: parent.width; height: parent.height;
+            Path {
+                x: 2px - parent.glow-spread / 2; y: 2px - parent.glow-spread / 2;
+                width: parent.width - 4px + parent.glow-spread; height: parent.height - 4px + parent.glow-spread;
+                commands: root.ring-path; stroke: root.service.accent.with-alpha(0.025);
+                stroke-width: root.ring-width + parent.glow-spread; fill: transparent;
+            }
+            Path {
+                x: 2px - parent.glow-spread / 2; y: 2px - parent.glow-spread / 2;
+                width: parent.width - 4px + parent.glow-spread; height: parent.height - 4px + parent.glow-spread;
+                commands: root.service.arc; stroke: root.service.accent.with-alpha(root.selected ? 0.06 : 0.045);
+                stroke-width: root.ring-width + parent.glow-spread; fill: transparent;
+            }
+        }
         Path {
             x: 2px; y: 2px; width: parent.width - 4px; height: parent.height - 4px;
-            commands: "M 0 0 L 0 0 M 56 56 L 56 56 M 28 4 A 24 24 0 1 1 28 52 A 24 24 0 1 1 28 4";
+            commands: root.ring-path;
             stroke: #3b3e43; stroke-width: root.ring-width; fill: transparent;
         }
         Path {
