@@ -537,7 +537,7 @@ component PositionRow inherits Rectangle {
     in property <int> side;
     callback changed(int);
     height: (36px * Tokens.settings-scale);
-    Text { x: 0px; y: 0px; width: (64px * Tokens.settings-scale); height: parent.height; text: "胶囊位置"; color: Tokens.text; font-size: (13px * Tokens.settings-scale); vertical-alignment: center; }
+    Text { x: 0px; y: 0px; width: (64px * Tokens.settings-scale); height: parent.height; text: "Mini 停靠"; color: Tokens.text; font-size: (13px * Tokens.settings-scale); vertical-alignment: center; }
     SettingSelect { x: round(74 * Tokens.settings-scale) * 1px; y: 0px; width: parent.width - self.x; height: parent.height; model: ["右侧", "左侧"]; index: root.side; selected(value) => { root.changed(value); } }
 }
 
@@ -569,7 +569,8 @@ export component SettingsWindow inherits Window {
     callback set-startup(bool);
     callback set-edge-hide(bool);
     callback set-dock-side(int);
-    callback reset-position();
+    callback reset-mini-position();
+    callback reset-capsule-position();
     callback open-link(int);
     callback exit-app();
     Rectangle {
@@ -698,8 +699,9 @@ export component SettingsWindow inherits Window {
                             spacing: (12px * Tokens.settings-scale);
                             SectionTitle { text: "行为"; }
                             SettingSwitch { label: "显示动画"; hint: "启用悬停、按下和展开过渡"; checked: root.animations-on; animated: root.animations-on; changed(value) => { root.set-animations(value); } }
-                            ActionRow { ui-scale: Tokens.settings-scale; caption: "恢复胶囊默认位置"; animated: root.animations-on; clicked => { root.reset-position(); } }
-                            Text { height: (70px * Tokens.settings-scale); text: "按住顶部 Logo 可拖动悬浮窗。\n启动时先显示，弹出模式约 3 秒后收起。"; color: Tokens.secondary; font-size: (12px * Tokens.settings-scale); wrap: word-wrap; }
+                            ActionRow { ui-scale: Tokens.settings-scale; caption: "恢复 Mini 默认位置"; animated: root.animations-on; clicked => { root.reset-mini-position(); } }
+                             ActionRow { ui-scale: Tokens.settings-scale; caption: "恢复胶囊默认位置"; animated: root.animations-on; clicked => { root.reset-capsule-position(); } }
+                            Text { height: (70px * Tokens.settings-scale); text: "Mini 与胶囊分别记忆桌面位置。\n拖动当前窗口不会移动另一个窗口。"; color: Tokens.secondary; font-size: (12px * Tokens.settings-scale); wrap: word-wrap; }
                         }
                         if root.selected-page == 4: VerticalLayout {
                             spacing: (16px * Tokens.settings-scale);

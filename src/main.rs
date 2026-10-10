@@ -12,7 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use placement::{Point, constrain, docked, edge_position};
+use placement::{Point, constrain, docked, edge_position, pinned};
 use slint::{
     ComponentHandle, Model, ModelRc, PhysicalPosition, SharedString, Timer, TimerMode, VecModel,
 };
@@ -149,38 +149,33 @@ fn remember_position(
     }
 }
 
-// Mini and expanded capsule share the same desktop anchor at their centers.
-// Conversion always clamps the larger window inside its current monitor.
-fn mini_to_capsule(mini: Point, mini_size: (i32, i32), capsule_size: (i32, i32)) -> Point {
-    let center = Point {
-        x: mini.x + mini_size.0 / 2,
-        y: mini.y + mini_size.1 / 2,
-    };
-    let area = platform_windows::work_area_at(center);
+// Mini and capsule have *independent* desktop positions. Switching
+// visibility must never derive or overwrite one from the other's location.
+fn default_mini_position(size: (i32, i32), area: placement::WorkArea, left: bool) -> Point {
     constrain(
         Point {
-            x: center.x - capsule_size.0 / 2,
-            y: center.y - capsule_size.1 / 2,
+            x: if left {
+                area.left + 15
+            } else {
+                area.right - size.0 - 15
+            },
+            y: area.bottom - size.1 - 15,
         },
-        capsule_size,
+        size,
         area,
     )
 }
 
-fn capsule_to_mini(capsule: Point, capsule_size: (i32, i32), mini_size: (i32, i32)) -> Point {
-    let center = Point {
-        x: capsule.x + capsule_size.0 / 2,
-        y: capsule.y + capsule_size.1 / 2,
-    };
-    let area = platform_windows::work_area_at(center);
-    constrain(
-        Point {
-            x: center.x - mini_size.0 / 2,
-            y: center.y - mini_size.1 / 2,
-        },
-        mini_size,
-        area,
-    )
+fn capsule_position(prefs: &Preferences, size: (i32, i32), default_anchor: Point) -> Point {
+    if let Some((x, y)) = prefs.saved_position {
+        let area = platform_windows::work_area_at(Point {
+            x: x + size.0 / 2,
+            y: y + size.1 / 2,
+        });
+        constrain(Point { x, y }, size, area)
+    } else {
+        pinned(size, platform_windows::work_area_at(default_anchor))
+    }
 }
 
 fn remember_mini(mini: &MiniWindow, prefs: &Rc<RefCell<Preferences>>) {
@@ -206,7 +201,7 @@ fn show_mini(mini: &MiniWindow, prefs: &Rc<RefCell<Preferences>>) {
         let area = platform_windows::work_area_at(Point { x, y });
         constrain(Point { x, y }, size, area)
     } else {
-        docked(
+        default_mini_position(
             size,
             platform_windows::work_area_at(platform_windows::cursor()),
             prefs.borrow().dock_left,
@@ -216,6 +211,7 @@ fn show_mini(mini: &MiniWindow, prefs: &Rc<RefCell<Preferences>>) {
     mini.window()
         .set_position(PhysicalPosition::new(position.x, position.y));
     let _ = mini.show();
+    remember_mini(mini, prefs); // Persist the initial Mini location once.
     let weak = mini.as_weak();
     Timer::single_shot(Duration::from_millis(25), move || {
         if let Some(m) = weak.upgrade() {
@@ -558,14 +554,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     {
         let mini_weak = mini.as_weak();
         let capsule_weak = capsule.as_weak();
+        let prefs = preferences.clone();
         mini.on_toggle_expanded(move || {
             if let (Some(m), Some(c)) = (mini_weak.upgrade(), capsule_weak.upgrade()) {
                 let pos = m.window().position();
-                let size = m.window().size();
-                let target = mini_to_capsule(
-                    Point { x: pos.x, y: pos.y },
-                    (size.width as i32, size.height as i32),
+                remember_mini(&m, &prefs);
+                // Saved capsule location wins; first opening uses the center
+                // of Mini's monitor, not Mini's bottom-right screen coordinates.
+                let target = capsule_position(
+                    &prefs.borrow(),
                     capsule_dimensions(&c),
+                    Point { x: pos.x, y: pos.y },
                 );
                 m.set_revealed(false);
                 let _ = m.hide();
@@ -622,27 +621,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                     let _ = d.hide();
                 }
                 c.set_selected_index(-1);
-                let pos = c.window().position();
-                let cs = capsule_dimensions(&c);
-                let size = m.window().size();
-                let target = capsule_to_mini(
-                    Point { x: pos.x, y: pos.y },
-                    cs,
-                    (size.width as i32, size.height as i32),
-                );
-                {
-                    let mut value = prefs.borrow_mut();
-                    value.mini_position = Some((target.x, target.y));
-                    #[cfg(debug_assertions)]
-                    let is_qa = std::env::var_os("WACU_QA_VIEW").is_some();
-                    #[cfg(not(debug_assertions))]
-                    let is_qa = false;
-                    if !is_qa {
-                        if let Err(err) = state::save(&value) {
-                            eprintln!("Saving Mini anchor: {err}");
-                        }
-                    }
-                }
+                // Moving the expanded capsule only changes saved_position.
+                // The Mini will restore itself at its own mini_position.
+                remember_position(&c, &prefs, None);
                 c.set_revealed(false);
                 let weak_cap = c.as_weak();
                 let weak_mini = m.as_weak();
@@ -993,6 +974,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             let target = constrain(Point { x: pos.x, y: pos.y }, size, area);
                             c.window()
                                 .set_position(PhysicalPosition::new(target.x, target.y));
+                            remember_position(&c, &prefs, None);
                         } else {
                             place_capsule(&c, &prefs.borrow());
                         }
@@ -1063,27 +1045,26 @@ fn main() -> Result<(), Box<dyn Error>> {
         settings.on_set_dock_side(move |index| {
             let mut value = pref.borrow_mut();
             value.dock_left = index == 1;
-            value.saved_position = None;
-            value.mini_position = None;
             origin.set(None);
             if mini_active {
+                // The side selector controls Mini only. The user's expanded
+                // capsule stays at its independently chosen position.
+                value.mini_position = None;
                 if let Some(m) = mini_weak.upgrade() {
-                    let size = m.window().size();
-                    let size = (size.width as i32, size.height as i32);
-                    let pos = docked(
-                        size,
-                        platform_windows::work_area_at(platform_windows::cursor()),
-                        value.dock_left,
-                    );
+                    let sz = m.window().size();
+                    let size = (sz.width as i32, sz.height as i32);
+                    let current = m.window().position();
+                    let area = platform_windows::work_area_at(Point {
+                        x: current.x + size.0 / 2,
+                        y: current.y + size.1 / 2,
+                    });
+                    let pos = default_mini_position(size, area, value.dock_left);
                     m.window().set_position(PhysicalPosition::new(pos.x, pos.y));
                     value.mini_position = Some((pos.x, pos.y));
-                    if let Some(c) = cap.upgrade().filter(|c| c.window().is_visible()) {
-                        let target = mini_to_capsule(pos, size, capsule_dimensions(&c));
-                        c.window()
-                            .set_position(PhysicalPosition::new(target.x, target.y));
-                    }
                 }
             } else if let Some(c) = cap.upgrade() {
+                // Legacy debug/pinned view uses the original dock selector.
+                value.saved_position = None;
                 if c.window().is_visible() || value.mode == Mode::Pinned {
                     place_capsule(&c, &value);
                     let position = c.window().position();
@@ -1100,42 +1081,64 @@ fn main() -> Result<(), Box<dyn Error>> {
         });
     }
     {
+        let pref = preferences.clone();
+        let mini_weak = mini.as_weak();
+        settings.on_reset_mini_position(move || {
+            let Some(m) = mini_weak.upgrade() else { return };
+            let size = m.window().size();
+            let pos = m.window().position();
+            let area = platform_windows::work_area_at(Point {
+                x: pos.x + size.width as i32 / 2,
+                y: pos.y + size.height as i32 / 2,
+            });
+            let mut value = pref.borrow_mut();
+            let target = default_mini_position(
+                (size.width as i32, size.height as i32),
+                area,
+                value.dock_left,
+            );
+            m.window()
+                .set_position(PhysicalPosition::new(target.x, target.y));
+            value.mini_position = Some((target.x, target.y));
+            // Do not modify saved_position or move the expanded capsule.
+            if let Err(error) = state::save(&value) {
+                eprintln!("Resetting Mini position: {error}");
+            }
+        });
+    }
+    {
         let cap = capsule.as_weak();
         let pref = preferences.clone();
-        let origin = edge_origin.clone();
         let mini_weak = mini.as_weak();
-        settings.on_reset_position(move || {
-            if let Some(c) = cap.upgrade() {
-                let mut value = pref.borrow_mut();
-                value.saved_position = None;
-                value.mini_position = None;
-                origin.set(None);
-                if mini_active {
-                    if let Some(m) = mini_weak.upgrade() {
-                        let size = m.window().size();
-                        let pos = docked(
-                            (size.width as i32, size.height as i32),
-                            platform_windows::work_area_at(platform_windows::cursor()),
-                            value.dock_left,
-                        );
-                        m.window().set_position(PhysicalPosition::new(pos.x, pos.y));
-                        value.mini_position = Some((pos.x, pos.y));
-                        if c.window().is_visible() {
-                            let target = mini_to_capsule(
-                                pos,
-                                (size.width as i32, size.height as i32),
-                                capsule_dimensions(&c),
-                            );
-                            c.window()
-                                .set_position(PhysicalPosition::new(target.x, target.y));
-                        }
-                    }
-                } else if c.window().is_visible() || value.mode == Mode::Pinned {
-                    place_capsule(&c, &value);
-                    let position = c.window().position();
-                    value.saved_position = Some((position.x, position.y));
+        let detail_weak = detail.as_weak();
+        let origin = edge_origin.clone();
+        settings.on_reset_capsule_position(move || {
+            let Some(c) = cap.upgrade() else { return };
+            let anchor = if let Some((x, y)) = pref.borrow().saved_position {
+                Point { x, y }
+            } else if let Some(m) = mini_weak.upgrade() {
+                let pos = m.window().position();
+                Point { x: pos.x, y: pos.y }
+            } else {
+                platform_windows::cursor()
+            };
+            let mut value = pref.borrow_mut();
+            origin.set(None);
+            let target = pinned(
+                capsule_dimensions(&c),
+                platform_windows::work_area_at(anchor),
+            );
+            value.saved_position = Some((target.x, target.y));
+            // Mini keeps its exact saved position.
+            if c.window().is_visible() {
+                c.window()
+                    .set_position(PhysicalPosition::new(target.x, target.y));
+                if let Some(d) = detail_weak.upgrade().filter(|d| d.window().is_visible()) {
+                    position_detail(&d, &c);
                 }
-                let _ = state::save(&value);
+            }
+            if let Err(error) = state::save(&value) {
+                eprintln!("Resetting capsule position: {error}");
             }
         });
     }
@@ -1468,6 +1471,104 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         match qa_view.as_str() {
             "mini" => {
+                if std::env::var_os("WACU_QA_MINI_POSITIONS").is_some() {
+                    let m = mini.as_weak();
+                    let c = capsule.as_weak();
+                    let settings = settings.as_weak();
+                    let prefs = preferences.clone();
+                    Timer::single_shot(Duration::from_millis(230), move || {
+                        let m = m.upgrade().unwrap();
+                        let c = c.upgrade().unwrap();
+                        let settings = settings.upgrade().unwrap();
+                        let area = platform_windows::work_area_at({
+                            let p = m.window().position();
+                            Point { x: p.x, y: p.y }
+                        });
+                        let mini_size = m.window().size();
+                        let mini_pos = default_mini_position(
+                            (mini_size.width as i32, mini_size.height as i32),
+                            area,
+                            false,
+                        );
+                        let capsule_pos = docked(capsule_dimensions(&c), area, false);
+                        assert_ne!(mini_pos.y, capsule_pos.y);
+                        m.window()
+                            .set_position(PhysicalPosition::new(mini_pos.x, mini_pos.y));
+                        {
+                            let mut pref = prefs.borrow_mut();
+                            pref.mini_position = Some((mini_pos.x, mini_pos.y));
+                            pref.saved_position = Some((capsule_pos.x, capsule_pos.y));
+                        }
+                        qa_click(m.window(), 33.0, 33.0);
+                        assert!(c.window().is_visible());
+                        assert_eq!(c.window().position().x, capsule_pos.x);
+                        assert_eq!(c.window().position().y, capsule_pos.y);
+                        qa_click(c.window(), 48.0, 49.0);
+                        let m2 = m.as_weak();
+                        let c2 = c.as_weak();
+                        let prefs2 = prefs.clone();
+                        let settings2 = settings.as_weak();
+                        Timer::single_shot(Duration::from_millis(310), move || {
+                            let m = m2.upgrade().unwrap();
+                            let c = c2.upgrade().unwrap();
+                            let settings = settings2.upgrade().unwrap();
+                            assert!(m.window().is_visible());
+                            assert_eq!(m.window().position().x, mini_pos.x);
+                            assert_eq!(m.window().position().y, mini_pos.y);
+                            qa_click(m.window(), 33.0, 33.0);
+                            assert_eq!(c.window().position().y, capsule_pos.y);
+                            // Simulate native drag to a distinctly different
+                            // location and save it on collapse.
+                            let moved = constrain(
+                                Point {
+                                    x: capsule_pos.x,
+                                    y: capsule_pos.y + 65,
+                                },
+                                capsule_dimensions(&c),
+                                area,
+                            );
+                            assert_ne!(capsule_pos.y, moved.y);
+                            c.window()
+                                .set_position(PhysicalPosition::new(moved.x, moved.y));
+                            qa_click(c.window(), 48.0, 49.0);
+                            let mini3 = m.as_weak();
+                            Timer::single_shot(Duration::from_millis(310), move || {
+                                let m = mini3.upgrade().unwrap();
+                                assert!(m.window().is_visible());
+                                assert_eq!(m.window().position().y, mini_pos.y);
+                                assert_eq!(
+                                    prefs2.borrow().mini_position,
+                                    Some((mini_pos.x, mini_pos.y))
+                                );
+                                assert_eq!(
+                                    prefs2.borrow().saved_position,
+                                    Some((moved.x, moved.y))
+                                );
+                                // Round-trip through the real JSON storage.
+                                state::save(&prefs2.borrow()).unwrap();
+                                let reloaded = state::load();
+                                assert_eq!(reloaded.mini_position, Some((mini_pos.x, mini_pos.y)));
+                                assert_eq!(reloaded.saved_position, Some((moved.x, moved.y)));
+                                // Resetting either position may not reset the other.
+                                settings.invoke_reset_mini_position();
+                                assert_eq!(
+                                    prefs2.borrow().saved_position,
+                                    Some((moved.x, moved.y))
+                                );
+                                settings.invoke_reset_capsule_position();
+                                assert_eq!(
+                                    prefs2.borrow().mini_position,
+                                    Some((mini_pos.x, mini_pos.y))
+                                );
+                                assert_eq!(
+                                    prefs2.borrow().saved_position,
+                                    Some((capsule_pos.x, capsule_pos.y))
+                                );
+                                eprintln!("WACU_QA mini_independent_positions_pass");
+                            });
+                        });
+                    });
+                }
                 if std::env::var_os("WACU_QA_MINI_INPUT").is_some() {
                     let m = mini.as_weak();
                     let c = capsule.as_weak();
@@ -1701,7 +1802,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         let c = capsule.as_weak();
         let d = detail.as_weak();
         let s = settings.as_weak();
-        Timer::single_shot(Duration::from_millis(900), move || {
+        let snapshot_delay = if std::env::var_os("WACU_QA_MINI_POSITIONS").is_some() {
+            1800
+        } else {
+            900
+        };
+        Timer::single_shot(Duration::from_millis(snapshot_delay), move || {
             let snapshot = match mode.as_str() {
                 "mini" => m
                     .upgrade()
@@ -1877,6 +1983,25 @@ fn main() -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mini_and_capsule_defaults_are_independent() {
+        let area = placement::WorkArea {
+            left: -1920,
+            top: 0,
+            right: 0,
+            bottom: 1040,
+        };
+        let mini_right = default_mini_position((66, 66), area, false);
+        let mini_left = default_mini_position((66, 66), area, true);
+        let capsule = pinned((96, 411), area);
+        assert_eq!(mini_right, Point { x: -81, y: 959 });
+        assert_eq!(mini_left, Point { x: -1905, y: 959 });
+        assert_eq!(capsule, Point { x: -111, y: 314 });
+        assert_ne!(mini_left.x, capsule.x);
+        assert_ne!(mini_right.y, capsule.y);
+    }
+
     #[test]
     fn startup_preview_hides_after_three_seconds_even_with_focus() {
         assert!(!should_hide_popup(

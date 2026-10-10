@@ -7,6 +7,7 @@ $configPath = Join-Path $env:APPDATA 'Wacu\preferences.json'
 $configBefore = if (Test-Path -LiteralPath $configPath) { (Get-FileHash -LiteralPath $configPath).Hash } else { $null }
 $cases = @(
     @{ View = 'mini'; Name = 'mini'; Count = 3; MiniInput = 1 },
+    @{ View = 'mini'; Name = 'mini-independent-positions'; Count = 3; MiniPositions = 1 },
     @{ View = 'capsule'; Name = 'capsule'; Count = 3 },
     @{ View = 'capsule'; Name = 'capsule-compact'; Count = 3; Size = 0 },
     @{ View = 'capsule'; Name = 'capsule-spacious'; Count = 3; Size = 2 },
@@ -49,6 +50,13 @@ foreach ($case in $cases) {
     if ($case.DragDetail) { $start.Environment['WACU_QA_DRAG_DETAIL'] = '1' }
     if ($case.DetailFade) { $start.Environment['WACU_QA_DETAIL_FADE'] = '1' }
     if ($case.MiniInput) { $start.Environment['WACU_QA_MINI_INPUT'] = '1' }
+    if ($case.MiniPositions) {
+        $start.Environment['WACU_QA_MINI_POSITIONS'] = '1'
+        $isolatedProfile = Join-Path $root 'target\qa-mini-position-profile'
+        New-Item -ItemType Directory -Force -Path (Join-Path $isolatedProfile 'Wacu') | Out-Null
+        Remove-Item -LiteralPath (Join-Path $isolatedProfile 'Wacu\preferences.json') -ErrorAction SilentlyContinue
+        $start.Environment['APPDATA'] = $isolatedProfile
+    }
     $start.Environment['WACU_QA_EXIT'] = '1'
     [void]$start.Environment.Remove('WACU_QA_INPUT')
     if ($case.Input) {
@@ -66,6 +74,7 @@ foreach ($case in $cases) {
     }
     if ($case.Input -and $diagnostics -notmatch 'WACU_QA input_pass') { throw ('输入检查未通过: ' + $diagnostics) }
     if ($case.MiniInput -and $diagnostics -notmatch 'WACU_QA mini_toggle_drag_settings_pass') { throw ('Mini 交互检查未通过: ' + $diagnostics) }
+    if ($case.MiniPositions -and $diagnostics -notmatch 'WACU_QA mini_independent_positions_pass') { throw ('Mini/胶囊独立位置检查未通过: ' + $diagnostics) }
     if ($case.DragDetail -and $diagnostics -notmatch 'WACU_QA detail_hide_restore_pass') {
         throw ('详情拖动恢复检查未通过: ' + $diagnostics)
     }
