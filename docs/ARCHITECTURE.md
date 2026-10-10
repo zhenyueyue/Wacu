@@ -1,67 +1,53 @@
-# Wacu · 技术架构 v0.1
+# Wacu · Rust + Slint 原生架构 v0.2
 
-## 栈
+## 确定路线
 
-- 桌面：Tauri 2 / Rust
-- UI：React 19 / TypeScript / CSS（后续可引入 shadcn/ui）
-- 发布目标：Windows x64，NSIS 安装包
-- 第一阶段不需要后台服务、数据库或平台密钥
+- **Rust**：应用主进程、状态、配置、数据采集和任务调度。
+- **Slint**：圆角胶囊、环形进度、详情和设置等全部 UI 与动画；单独的 SystemTrayIcon 元素。
+- **Win32 API**：桌面工作区计算、窗口的 ToolWindow 属性、窗口锚点定位、拖动与前台激活状态。
+- **没有 WebView、Node.js、Tauri、React、Chromium**：对低配电脑友好、独立运行。
 
-## 模块
+## 文件结构
 
 ```
-System tray ──┐
-             ├─ Rust Window Manager ── Capsule / Detail / Settings
-React UI ────┘           │
-                        Mode state (app_config_dir/display-mode.json)
-
-Future Provider Manager
-├─ CodexAdapter        (本机 CLI/app-server)
-├─ ClaudeCodeAdapter   (官方/授权接口优先 + 本地统计)
-├─ WorkBuddyAdapter    (先验证官方开放平台权限)
-└─ API Providers       (独立账单模式)
-        │
-        └─ UsageSnapshot -> Cache -> UI
+Cargo.toml                  # 唯一 Rust 工程
+build.rs                    # Slint UI 编译
+ui/wacu.slint               # 胶囊、详情、设置、系统托盘
+assets/tray.svg             # 内嵌品牌图标
+src/main.rs                 # UI 状态协调、事件和生命周期
+src/platform_windows.rs     # 小范围 Windows 原生 API 封装
+src/placement.rs            # 可测试的多屏工作区坐标算法
+src/state.rs                # 模式、位置和启用服务的 JSON 持久化
 ```
 
-## 当前窗口
+## 窗口
 
-| 标签 | 职责 | 特点 |
-| --- | --- | --- |
-| `capsule` | 快速浏览剩余百分比 | 114x458，透明、无边框、置顶，不占任务栏 |
-| `detail` | 单个平台多额度详情 | 336x474，透明、无边框 |
-| `settings` | 显示模式、服务及偏好 | 506x660，普通原生窗口 |
+- **CapsuleWindow**：透明背景、无边框、置顶、圆角胶囊。默认仅托盘，不启动就显示；常驻模式持久化位置。
+- **DetailWindow**：点选某项时弹出，显示多个额度说明及真实接入的预留状态。
+- **SettingsWindow**：模式和服务管理。
+- **WacuTray**：Slint 自带 Windows Shell 系统托盘，保证隐藏窗口时后台事件循环仍存活。
 
-Rust commands: `get_display_mode`、`set_display_mode`、`toggle_capsule`、`show_settings`、`show_detail`、`get_selected_service`。
-跨窗口同步通过 `wacu:mode-changed`、`wacu:detail-service` 与 `wacu:preferences-changed`。
+## 使用状态
 
-## 数据契约（下一阶段）
+用户设置文件保存在 `%APPDATA%/Wacu/preferences.json`，修改时使用先写临时文件再原子替换的策略。仓库中不保存 API Key、Token 或用户资料。
 
-```ts
-interface UsageSnapshot {
-  serviceId: string;
-  source: "subscription" | "api";
-  status: "ok" | "stale" | "unauthorized" | "unsupported" | "error";
-  collectedAt: string;
-  windows: Array<{
-    id: string;
-    label: string;
-    remainingPercent?: number;
-    used?: number;
-    total?: number;
-    unit?: "tokens" | "credits" | "requests" | "currency";
-    resetsAt?: string;
-  }>;
+## 性能守则
+
+- 不增加额外模型调用获取用量。
+- 定时请求 2–5 分钟起步，断网/限流自动退避；倒计时不触发网络请求。
+- 动画只在交互或数据变化时执行，不以 60 FPS 轮询刷新。
+- 视觉胶囊与后续服务采集器解耦，采集器仅输出统一 UsageSnapshot。
+- Release 实机验证 CPU、内存、老显卡渲染器兼容与多屏 DPI。
+
+## 下阶段统一用量结构
+
+```rust
+struct UsageSnapshot {
+    service_id: String,
+    status: UsageStatus, // Ok, Stale, Unauthorized, Unsupported, Error
+    collected_at: std::time::SystemTime,
+    windows: Vec<QuotaWindow>,
 }
 ```
 
-缺失字段不得用 0 或 100 替代。对每个采集器设置缓存/超时/退避，并明确定义数据状态和权限边界。
-
-## 后续必须处理的 Windows 特性
-
-1. 任务栏位置/自动隐藏与每屏 DPI 缩放需要真机验证；定位已使用屏幕工作区。
-2. Popup 已改为托盘点击锚点定位，不再固定主屏幕右下角。
-3. Pinned 已保存/恢复物理像素坐标，离屏恢复会约束回屏幕工作区；自动吸边待做。
-4. 动态胶囊高度和多项内容滚动另行开发，需要专门测试原生窗口调整尺寸。
-4. Explorer 重启时的托盘恢复、应用单实例、启动和退出策略。
-5. 根据内容项数动态调整胶囊高度；完整键盘与无障碍交互。
+真实数据显示“剩余百分比”之前必须明确来源和窗口；不可把模拟数据冒充真实配额。

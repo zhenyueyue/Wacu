@@ -1,0 +1,407 @@
+import { Button, CheckBox, Switch, ScrollView } from "std-widgets.slint";
+
+export struct Service {
+    label: string,
+    subtitle: string,
+    symbol: string,
+    percent: int,
+    remaining: string,
+    reset: string,
+    accent: color,
+    arc: string,
+    visible: bool,
+}
+
+component MiniAction inherits Rectangle {
+    in property <string> symbol;
+    callback clicked();
+    width: 34px;
+    height: 34px;
+    border-radius: 12px;
+    background: hit.has-hover ? #34383e : #202328;
+    animate background { duration: 140ms; }
+    Text {
+        text: root.symbol;
+        color: hit.has-hover ? #ddf8eb : #b0b9bf;
+        font-size: 17px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    hit := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component QuotaItem inherits Rectangle {
+    in property <Service> service;
+    callback selected();
+    height: 102px;
+    width: 88px;
+    background: hit.has-hover ? #2b3036 : transparent;
+    border-radius: 30px;
+    animate background { duration: 130ms; }
+
+    ring := Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: 9px;
+        width: hit.has-hover ? 58px : 54px;
+        height: hit.has-hover ? 58px : 54px;
+        border-radius: self.width / 2;
+        background: #1c2026;
+        border-width: 4px;
+        border-color: #383d45;
+        animate width, height { duration: 180ms; easing: ease-out; }
+
+        Path {
+            x: 0px; y: 0px;
+            width: parent.width;
+            height: parent.height;
+            commands: root.service.arc;
+            stroke: root.service.accent;
+            stroke-width: 4px;
+            fill: transparent;
+        }
+        Rectangle {
+            x: 10px;
+            y: 10px;
+            width: parent.width - 20px;
+            height: parent.height - 20px;
+            border-radius: self.width / 2;
+            background: root.service.accent.darker(38%);
+            Text {
+                text: root.service.symbol;
+                color: #f8f5ef;
+                font-size: root.service.symbol == "w" ? 22px : 18px;
+                font-weight: 700;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+    Text {
+        y: 72px; height: 23px;
+        width: parent.width;
+        text: root.service.percent + "%";
+        color: #f0f2f5;
+        font-size: 18px;
+        font-weight: 700;
+        horizontal-alignment: center;
+    }
+    hit := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.selected(); }
+    }
+}
+
+export component CapsuleWindow inherits Window {
+    title: "Wacu";
+    width: 106px;
+    in property <int> visible-count: 3;
+    in-out property <bool> revealed: false;
+    height: 112px + 102px * visible-count;
+    background: transparent;
+    no-frame: true;
+    always-on-top: true;
+    icon: @image-url("../assets/tray.svg");
+
+    in property <[Service]> services;
+    in property <bool> is-pinned: false;
+    callback open-service(int);
+    callback open-settings();
+    callback toggle-mode();
+    callback start-drag();
+
+    // Transparent window, opaque capsule. No browser surface.
+    shell := Rectangle {
+        x: 5px; y: 5px;
+        width: parent.width - 10px;
+        height: parent.height - 10px;
+        border-radius: 48px;
+        background: #15171b;
+        opacity: root.revealed ? 1 : 0;
+        animate opacity { duration: 170ms; easing: ease-out; }
+        border-color: #3a3e42;
+        border-width: 1px;
+        drop-shadow-blur: 8px;
+        drop-shadow-color: #40000000;
+        drop-shadow-offset-y: 3px;
+
+        VerticalLayout {
+            padding-top: 13px;
+            padding-bottom: 10px;
+            padding-left: 4px;
+            padding-right: 4px;
+            spacing: 4px;
+            alignment: center;
+
+            Rectangle {
+                height: 36px;
+                width: 85px;
+                background: transparent;
+                Text {
+                    y: 1px;
+                    width: parent.width;
+                    text: "●";
+                    color: #89dab9;
+                    font-size: 11px;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    y: 8px;
+                    width: parent.width;
+                    text: "w";
+                    color: #c8e6d9;
+                    font-size: 20px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    y: 29px;
+                    width: parent.width;
+                    text: "演示";
+                    color: #89968f;
+                    font-size: 9px;
+                    horizontal-alignment: center;
+                }
+                TouchArea {
+                    enabled: root.is-pinned;
+                    mouse-cursor: grab;
+                    pointer-event(event) => {
+                        if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                            root.start-drag();
+                        }
+                    }
+                }
+            }
+            Rectangle { width: 35px; height: 1px; background: #35383e; horizontal-stretch: 0; }
+
+            for service[idx] in root.services: QuotaItem {
+                visible: service.visible;
+                service: service;
+                selected => { root.open-service(idx); }
+            }
+
+            Rectangle { width: 35px; height: 1px; background: #35383e; horizontal-stretch: 0; }
+            HorizontalLayout {
+                height: 37px;
+                alignment: center;
+                spacing: 5px;
+                MiniAction {
+                    symbol: root.is-pinned ? "◇" : "◆";
+                    clicked => { root.toggle-mode(); }
+                }
+                MiniAction {
+                    symbol: "⚙";
+                    clicked => { root.open-settings(); }
+                }
+            }
+        }
+    }
+}
+
+component QuotaBar inherits Rectangle {
+    in property <string> label;
+    in property <int> value;
+    in property <string> hint;
+    in property <color> accent;
+    height: 66px;
+    background: transparent;
+    Text { x: 0px; y: 0px; text: root.label; color: #e0e4e8; font-size: 13px; }
+    Text { x: parent.width - 48px; y: 0px; width: 48px; text: root.value + "%"; color: #ecf1ed; font-size: 13px; horizontal-alignment: right; }
+    Rectangle {
+        y: 26px; width: parent.width; height: 7px; border-radius: 4px; background: #303740;
+        Rectangle {
+            height: parent.height;
+            width: parent.width * (root.value / 100);
+            background: root.accent;
+            border-radius: 4px;
+            animate width { duration: 550ms; easing: ease-out; }
+        }
+    }
+    Text { y: 40px; text: root.hint; color: #919ba6; font-size: 11px; }
+}
+
+export component DetailWindow inherits Window {
+    width: 342px; height: 464px;
+    no-frame: true; always-on-top: true; background: transparent;
+    title: "Wacu · 额度详情";
+    in property <Service> selected-service;
+    callback close-detail();
+    callback refresh();
+
+    Rectangle {
+        x: 5px; y: 5px; width: parent.width - 10px; height: parent.height - 10px;
+        background: #191d23; border-radius: 23px; border-width: 1px; border-color: #394047;
+        drop-shadow-blur: 9px; drop-shadow-color: #44000000;
+        VerticalLayout {
+            padding: 20px; spacing: 16px;
+            HorizontalLayout {
+                height: 32px;
+                Text { text: "Wacu   /   用量详情"; color: #e9f1ed; font-weight: 600; font-size: 13px; }
+                Rectangle { horizontal-stretch: 1; }
+                MiniAction { symbol: "×"; clicked => { root.close-detail(); } }
+            }
+            HorizontalLayout {
+                height: 52px; spacing: 12px;
+                Rectangle {
+                    width: 48px; height: 48px; border-radius: 15px; background: root.selected-service.accent.darker(48%);
+                    Text { text: root.selected-service.symbol; color: #f8f9f4; font-size: 24px; horizontal-alignment: center; vertical-alignment: center; }
+                }
+                VerticalLayout {
+                    alignment: center; spacing: 3px;
+                    Text { text: root.selected-service.label; color: #f6f7f9; font-weight: 700; font-size: 18px; }
+                    Text { text: root.selected-service.subtitle; color: #a1aab4; font-size: 11px; }
+                }
+            }
+            Rectangle {
+                height: 119px; background: #28322f; border-radius: 18px;
+                VerticalLayout {
+                    padding: 16px; spacing: 3px;
+                    Text { text: "当前剩余额度"; color: #bed0c7; font-size: 12px; }
+                    Text { text: root.selected-service.percent + "%"; font-size: 45px; font-weight: 700; color: #dff7e9; }
+                    Text { text: "演示数据 · 尚未连接账户"; font-size: 10px; color: #aec8bc; }
+                }
+            }
+            VerticalLayout {
+                spacing: 8px;
+                QuotaBar {
+                    width: parent.width;
+                    label: root.selected-service.remaining;
+                    value: root.selected-service.percent;
+                    hint: root.selected-service.reset;
+                    accent: root.selected-service.accent;
+                }
+                Rectangle {
+                    height: 55px;
+                    border-radius: 11px;
+                    background: #23282f;
+                    Text { text: "真实额度接口将在下一阶段接入"; color: #9aa5aa; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                }
+            }
+            Rectangle { vertical-stretch: 1; }
+            Rectangle {
+                height: 39px; border-radius: 12px; background: #293d35;
+                Text { text: "刷新数据（演示模式）"; color: #b8dec8; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+                TouchArea { mouse-cursor: pointer; clicked => { root.refresh(); } }
+            }
+        }
+    }
+}
+
+component SettingToggle inherits Rectangle {
+    in property <string> label;
+    in property <string> subtitle;
+    in-out property <bool> enabled;
+    callback toggled(bool);
+    height: 62px;
+    background: #21262d;
+    border-radius: 14px;
+    HorizontalLayout {
+        padding-left: 15px; padding-right: 15px; alignment: center; spacing: 6px;
+        VerticalLayout {
+            spacing: 4px; alignment: center;
+            Text { text: root.label; font-size: 13px; color: #f0f2f4; }
+            Text { text: root.subtitle; font-size: 11px; color: #919ca6; }
+        }
+        Rectangle { horizontal-stretch: 1; }
+        Rectangle {
+            width: 38px; height: 22px; border-radius: 12px;
+            background: root.enabled ? #8bd2b6 : #535963;
+            animate background { duration: 160ms; }
+            Rectangle {
+                x: root.enabled ? 19px : 3px;
+                y: 3px; width: 16px; height: 16px; border-radius: 8px;
+                background: #f0f4f1;
+                animate x { duration: 140ms; easing: ease-out; }
+            }
+        }
+    }
+    TouchArea { mouse-cursor: pointer; clicked => { root.toggled(!root.enabled); } }
+}
+
+export component SettingsWindow inherits Window {
+    title: "Wacu · 设置";
+    width: 480px; height: 620px;
+    background: #181b21;
+    in-out property <bool> pinned-mode: false;
+    in-out property <bool> show-codex: true;
+    in-out property <bool> show-claude: true;
+    in-out property <bool> show-workbuddy: true;
+    callback set-pinned(bool);
+    callback toggle-service(int, bool);
+    callback reset-position();
+
+    VerticalLayout {
+        padding: 25px; spacing: 18px;
+        HorizontalLayout {
+            height: 64px; spacing: 12px;
+            Rectangle {
+                width: 52px; height: 52px; border-radius: 17px; background: #293e35;
+                Text { text: "w"; font-size: 31px; font-weight: 700; color: #a0e3c2; horizontal-alignment: center; vertical-alignment: center; }
+            }
+            VerticalLayout {
+                spacing: 3px; alignment: center;
+                Text { text: "Wacu"; color: #f3f5f6; font-size: 24px; font-weight: 700; }
+                Text { text: "A little watcher for your AI."; font-size: 11px; color: #9baea4; }
+            }
+        }
+        Text { text: "显示模式"; font-size: 14px; font-weight: 600; color: #e7efe9; }
+        HorizontalLayout {
+            spacing: 12px; height: 95px;
+            Rectangle {
+                background: !root.pinned-mode ? #294239 : #24282f;
+                border-color: !root.pinned-mode ? #80c5a8 : #39414a;
+                border-width: 1px; border-radius: 15px;
+                horizontal-stretch: 1;
+                VerticalLayout {
+                    padding: 15px; spacing: 9px;
+                    Text { text: "▣   点击弹出"; color: #eff8f3; font-size: 14px; font-weight: 600; }
+                    Text { text: "点击托盘，失焦收起"; color: #a5b3ac; font-size: 11px; }
+                }
+                TouchArea { mouse-cursor: pointer; clicked => { root.set-pinned(false); } }
+            }
+            Rectangle {
+                background: root.pinned-mode ? #294239 : #24282f;
+                border-color: root.pinned-mode ? #80c5a8 : #39414a;
+                border-width: 1px; border-radius: 15px;
+                horizontal-stretch: 1;
+                VerticalLayout {
+                    padding: 15px; spacing: 9px;
+                    Text { text: "◇   常驻悬浮"; color: #eff8f3; font-size: 14px; font-weight: 600; }
+                    Text { text: "始终置顶，可以拖动"; color: #a5b3ac; font-size: 11px; }
+                }
+                TouchArea { mouse-cursor: pointer; clicked => { root.set-pinned(true); } }
+            }
+        }
+        Text { text: "监控服务"; font-size: 14px; color: #e7efe9; font-weight: 600; }
+        SettingToggle { label: "Codex"; subtitle: "OpenAI · ChatGPT"; enabled: root.show-codex; toggled(value) => { root.toggle-service(0, value); } }
+        SettingToggle { label: "Claude Code"; subtitle: "Anthropic · Claude"; enabled: root.show-claude; toggled(value) => { root.toggle-service(1, value); } }
+        SettingToggle { label: "WorkBuddy"; subtitle: "Credits · 积分"; enabled: root.show-workbuddy; toggled(value) => { root.toggle-service(2, value); } }
+        Rectangle {
+            height: 38px; background: #292f32; border-radius: 11px;
+            Text { text: "↺   恢复胶囊位置"; color: #bfdfd0; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+            TouchArea { mouse-cursor: pointer; clicked => { root.reset-position(); } }
+        }
+        Rectangle { vertical-stretch: 1; }
+        Text { text: "0.2.0  ·  Slint 原生版  ·  当前全部为演示额度"; font-size: 11px; color: #89948e; horizontal-alignment: center; }
+    }
+}
+
+export component WacuTray inherits SystemTrayIcon {
+    in property <image> tray-icon;
+    icon: root.tray-icon;
+    tooltip: "Wacu · AI 用量守望";
+    callback tray-clicked();
+    clicked => { root.tray-clicked(); }
+    callback show-settings();
+    callback switch-mode();
+    callback exit-app();
+    Menu {
+        MenuItem { title: "显示 / 隐藏胶囊"; activated => { root.tray-clicked(); } }
+        MenuItem { title: "设置"; activated => { root.show-settings(); } }
+        MenuItem { title: "切换弹出 / 常驻"; activated => { root.switch-mode(); } }
+        MenuSeparator {}
+        MenuItem { title: "退出 Wacu"; activated => { root.exit-app(); } }
+    }
+}

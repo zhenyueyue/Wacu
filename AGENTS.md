@@ -3,7 +3,7 @@
 ## 项目
 
 - Windows AI 用量守望组件 Wacu。
-- 技术栈：Tauri 2 / Rust / React / TypeScript。
+- 技术栈：Rust + Slint + Win32 API；禁止重新引入 Tauri、React、WebView2 运行时。
 - 默认远程仓库：`https://github.com/zhenyueyue/Wacu.git`。
 - 默认工作分支：`main`。
 
