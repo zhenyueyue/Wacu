@@ -28,11 +28,13 @@ component IconButton inherits Rectangle {
     in property <image> icon;
     in property <bool> animated: true;
     in property <float> ui-scale: Tokens.panel-scale;
+    in property <length> icon-size: 20px * root.ui-scale;
+    in property <length> icon-top: (root.height - root.icon-size) / 2;
     callback activated();
     width: 32px * root.ui-scale; height: 32px * root.ui-scale; border-radius: 8px * root.ui-scale;
     background: hit.pressed ? #35353b : (hit.has-hover ? Tokens.raised : transparent);
     animate background { duration: root.animated ? 100ms : 0ms; easing: ease-out; }
-    Glyph { x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; width: 20px * root.ui-scale; height: 20px * root.ui-scale; source: root.icon; }
+    Glyph { x: (parent.width - self.width) / 2; y: root.icon-top; width: root.icon-size; height: root.icon-size; source: root.icon; }
     hit := TouchArea { mouse-cursor: pointer; clicked => { root.activated(); } }
 }
 
@@ -43,6 +45,7 @@ component QuotaItem inherits Rectangle {
     in property <bool> animated: true;
     callback activated();
     in property <int> size-mode: 1;
+    property <length> ring-width: root.size-mode == 0 ? 3px : (root.size-mode == 1 ? 4px : 5px);
     width: root.size-mode == 0 ? 40px : (root.size-mode == 1 ? 56px : 72px);
     height: root.size-mode == 0 ? 52px : (root.size-mode == 1 ? 70px : 84px);
     border-radius: root.width / 2;
@@ -57,8 +60,13 @@ component QuotaItem inherits Rectangle {
         animate width, height, y { duration: root.animated ? 100ms : 0ms; easing: ease-out; }
         Path {
             x: 2px; y: 2px; width: parent.width - 4px; height: parent.height - 4px;
+            commands: "M 0 0 L 0 0 M 56 56 L 56 56 M 28 4 A 24 24 0 1 1 28 52 A 24 24 0 1 1 28 4";
+            stroke: #3b3e43; stroke-width: root.ring-width; fill: transparent;
+        }
+        Path {
+            x: 2px; y: 2px; width: parent.width - 4px; height: parent.height - 4px;
             commands: root.service.arc; stroke: root.service.accent;
-            stroke-width: 2px; fill: transparent;
+            stroke-width: root.ring-width; fill: transparent;
         }
         Rectangle {
             x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
@@ -102,7 +110,9 @@ export component CapsuleWindow inherits Window {
     width: root.size-mode == 0 ? 72px : (root.size-mode == 1 ? 88px : 104px);
     property <length> item-height: root.size-mode == 0 ? 52px : (root.size-mode == 1 ? 70px : 84px);
     property <length> action-size: root.size-mode == 0 ? 32px : (root.size-mode == 1 ? 40px : 48px);
-    height: 56px + root.action-size + root.item-height * max(1, visible-count);
+    property <length> logo-size: root.size-mode == 0 ? 32px : (root.size-mode == 1 ? 40px : 48px);
+    property <length> area-gap: root.size-mode == 0 ? 12px : (root.size-mode == 1 ? 16px : 20px);
+    height: 56px + root.logo-size + root.area-gap * 2 + root.action-size + root.item-height * max(1, visible-count);
     background: transparent; no-frame: true; always-on-top: true; default-font-family: "Segoe UI";
     icon: @image-url("../assets/tray.svg");
     in property <[Service]> services;
@@ -119,7 +129,7 @@ export component CapsuleWindow inherits Window {
     Rectangle {
         x: 12px; y: root.revealed ? 12px : 18px;
         width: parent.width - 24px; height: parent.height - 24px;
-        border-radius: root.size-mode == 0 ? 20px : (root.size-mode == 1 ? 24px : 28px); border-width: 1px; border-color: root.selected-index >= 0 ? #3b82f6 : #45494a;
+        border-radius: self.width / 2; border-width: 1px; border-color: root.selected-index >= 0 ? #3b82f6 : #45494a;
         background: #1b1c1f;
         opacity: root.revealed ? root.surface-opacity : 0;
         drop-shadow-blur: 14px; drop-shadow-offset-y: 4px; drop-shadow-color: root.selected-index >= 0 ? #3b82f633 : #00000050;
@@ -130,6 +140,22 @@ export component CapsuleWindow inherits Window {
         }
         VerticalLayout {
             padding-top: 16px; padding-bottom: 16px; padding-left: 4px; padding-right: 4px; spacing: 0px;
+            HorizontalLayout {
+                height: root.logo-size; alignment: center;
+                Rectangle {
+                    width: root.logo-size; height: root.logo-size;
+                    Image {
+                        x: 0px; y: 0px; width: parent.width; height: parent.height;
+                        source: root.size-mode == 0 ? @image-url("../assets/logo-compact.png") : (root.size-mode == 1 ? @image-url("../assets/logo-standard.png") : @image-url("../assets/logo-spacious.png"));
+                        image-fit: contain; image-rendering: smooth;
+                    }
+                    TouchArea {
+                        enabled: root.is-pinned; mouse-cursor: grab;
+                        pointer-event(event) => { if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) { root.start-drag(); } }
+                    }
+                }
+            }
+            Rectangle { height: root.area-gap; }
             if root.visible-count == 0: Rectangle {
                 height: root.item-height;
                 Text { text: "未启用\n服务"; color: Tokens.secondary; font-size: root.size-mode == 0 ? 10px : (root.size-mode == 1 ? 12px : 14px); horizontal-alignment: center; vertical-alignment: center; }
@@ -140,9 +166,10 @@ export component CapsuleWindow inherits Window {
                 panel-on-left: root.panel-on-left; animated: root.animated;
                 activated => { root.open-service(service.source-index); }
             }
+            Rectangle { height: root.area-gap; }
             HorizontalLayout {
                 height: root.action-size; alignment: center;
-                IconButton { ui-scale: root.size-mode == 0 ? 1 : (root.size-mode == 1 ? 1.25 : 1.5); icon: @image-url("../assets/icons/settings.svg"); animated: root.animated; activated => { root.open-settings(); } }
+                IconButton { ui-scale: root.size-mode == 0 ? 1 : (root.size-mode == 1 ? 1.25 : 1.5); icon-size: root.size-mode == 0 ? 16px : (root.size-mode == 1 ? 20px : 24px); icon-top: 0px; icon: @image-url("../assets/icons/settings.svg"); animated: root.animated; activated => { root.open-settings(); } }
             }
         }
     }
