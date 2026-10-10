@@ -12,7 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use placement::{Point, constrain, docked, edge_position, popup};
+use placement::{Point, constrain, docked, edge_position};
 use slint::{
     ComponentHandle, Model, ModelRc, PhysicalPosition, SharedString, Timer, TimerMode, VecModel,
 };
@@ -27,14 +27,17 @@ const VALUES: [i32; 3] = [13, 24, 2];
 
 fn arc_svg(percent: i32) -> SharedString {
     if percent <= 0 {
-        return "M 0 0 L 0 0 M 56 56 L 56 56".into();
+        return "".into();
+    }
+    if percent >= 100 {
+        return "M 28 4 A 24 24 0 1 1 28 52 A 24 24 0 1 1 28 4 Z".into();
     }
     let f = (percent.min(100) as f64 / 100.0).min(0.99998);
     let angle = (-90.0 + f * 360.0).to_radians();
     let end_x = 28.0 + 24.0 * angle.cos();
     let end_y = 28.0 + 24.0 * angle.sin();
     let large = if percent > 50 { 1 } else { 0 };
-    format!("M 0 0 L 0 0 M 56 56 L 56 56 M 28 4 A 24 24 0 {large} 1 {end_x:.2} {end_y:.2}").into()
+    format!("M 28 4 A 24 24 0 {large} 1 {end_x:.2} {end_y:.2}").into()
 }
 
 fn service(index: usize, visible: bool) -> Service {
@@ -98,39 +101,60 @@ fn capsule_dimensions(capsule: &CapsuleWindow) -> (i32, i32) {
     (size.width as i32, size.height as i32)
 }
 
-fn place_capsule(capsule: &CapsuleWindow, prefs: &Preferences, anchor: Option<Point>) {
+fn place_capsule(capsule: &CapsuleWindow, prefs: &Preferences) {
     let size = capsule_dimensions(capsule);
-    let position = match prefs.mode {
-        Mode::Popup => {
-            let at = anchor.unwrap_or_else(platform_windows::cursor);
-            popup(at, size, platform_windows::work_area_at(at))
-        }
-        Mode::Pinned => {
-            if let Some((x, y)) = prefs.saved_position {
-                let position = Point { x, y };
-                let area = platform_windows::work_area_at(Point {
-                    x: x + size.0 / 2,
-                    y: y + size.1 / 2,
-                });
-                constrain(position, size, area)
-            } else {
-                docked(
-                    size,
-                    platform_windows::work_area_at(platform_windows::cursor()),
-                    prefs.dock_left,
-                )
-            }
-        }
+    let position = if let Some((x, y)) = prefs.saved_position {
+        let position = Point { x, y };
+        let area = platform_windows::work_area_at(Point {
+            x: x + size.0 / 2,
+            y: y + size.1 / 2,
+        });
+        constrain(position, size, area)
+    } else {
+        docked(
+            size,
+            platform_windows::work_area_at(platform_windows::cursor()),
+            prefs.dock_left,
+        )
     };
     capsule
         .window()
         .set_position(PhysicalPosition::new(position.x, position.y));
 }
 
-fn show_capsule(capsule: &CapsuleWindow, prefs: &Preferences, anchor: Option<Point>) {
+fn remember_position(
+    capsule: &CapsuleWindow,
+    prefs: &Rc<RefCell<Preferences>>,
+    visible_origin: Option<Point>,
+) {
+    if !capsule.window().is_visible() {
+        return;
+    }
+    let current = capsule.window().position();
+    let point = visible_origin.unwrap_or(Point {
+        x: current.x,
+        y: current.y,
+    });
+    let mut value = prefs.borrow_mut();
+    if value.saved_position == Some((point.x, point.y)) {
+        return;
+    }
+    value.saved_position = Some((point.x, point.y));
+    // Visual previews update only their in-memory preferences.
+    #[cfg(debug_assertions)]
+    if std::env::var_os("WACU_QA_VIEW").is_some() {
+        return;
+    }
+    if let Err(error) = state::save(&value) {
+        eprintln!("Saving position: {error}");
+    }
+}
+
+fn show_capsule(capsule: &CapsuleWindow, prefs: &Rc<RefCell<Preferences>>) {
     capsule.set_revealed(false);
     let _ = capsule.show();
-    place_capsule(capsule, prefs, anchor);
+    place_capsule(capsule, &prefs.borrow());
+    remember_position(capsule, prefs, None);
     // The native HWND may only become available after an event-loop iteration.
     let weak = capsule.as_weak();
     Timer::single_shot(Duration::from_millis(30), move || {
@@ -142,7 +166,7 @@ fn show_capsule(capsule: &CapsuleWindow, prefs: &Preferences, anchor: Option<Poi
     });
 }
 
-fn toggle_capsule(capsule: &CapsuleWindow, prefs: &Preferences) {
+fn toggle_capsule(capsule: &CapsuleWindow, prefs: &Rc<RefCell<Preferences>>) {
     if capsule.window().is_visible() {
         capsule.set_revealed(false);
         let weak = capsule.as_weak();
@@ -154,7 +178,7 @@ fn toggle_capsule(capsule: &CapsuleWindow, prefs: &Preferences) {
             }
         });
     } else {
-        show_capsule(capsule, prefs, Some(platform_windows::cursor()));
+        show_capsule(capsule, prefs);
     }
 }
 
@@ -164,7 +188,9 @@ fn set_mode(
     model: &Rc<VecModel<Service>>,
     capsule: &CapsuleWindow,
     settings: &SettingsWindow,
+    edge_origin: &Cell<Option<Point>>,
 ) {
+    remember_position(capsule, prefs, edge_origin.take());
     {
         let mut value = prefs.borrow_mut();
         value.mode = mode;
@@ -179,7 +205,7 @@ fn set_mode(
             capsule.set_revealed(false);
             let _ = capsule.hide();
         }
-        Mode::Pinned => show_capsule(capsule, &current, None),
+        Mode::Pinned => show_capsule(capsule, prefs),
     }
 }
 
@@ -257,6 +283,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     #[cfg(debug_assertions)]
     let qa_view = std::env::var("WACU_QA_VIEW").unwrap_or_default();
     #[cfg(debug_assertions)]
+    if std::env::var_os("WACU_QA_POSITION").is_some() {
+        let expected = std::env::current_dir()?.join("target/qa-position-profile");
+        let actual = std::env::var("APPDATA")
+            .unwrap_or_default()
+            .replace('/', "\\");
+        if qa_view != "capsule"
+            || !actual.eq_ignore_ascii_case(&expected.to_string_lossy().replace('/', "\\"))
+        {
+            return Err("Position QA requires an isolated APPDATA".into());
+        }
+    }
+    #[cfg(debug_assertions)]
     if matches!(
         qa_view.as_str(),
         "capsule" | "quick" | "detail" | "settings"
@@ -308,11 +346,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                 eprintln!("WACU_QA tray_clicked mode={:?}", pref.borrow().mode);
             }
             if let Some(c) = cap.upgrade() {
-                origin.set(None);
+                remember_position(&c, &pref, origin.take());
                 if !c.window().is_visible() {
                     last_open.set(Instant::now());
                 }
-                toggle_capsule(&c, &pref.borrow());
+                toggle_capsule(&c, &pref);
             }
         });
     }
@@ -325,13 +363,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             let model = model.clone();
             move || {
                 if let (Some(c), Some(s)) = (cap.upgrade(), settings.upgrade()) {
-                    origin.set(None);
                     let next = if pref.borrow().mode == Mode::Popup {
                         Mode::Pinned
                     } else {
                         Mode::Popup
                     };
-                    set_mode(next, &pref, &model, &c, &s);
+                    set_mode(next, &pref, &model, &c, &s, &origin);
                 }
             }
         });
@@ -428,13 +465,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         let origin = edge_origin.clone();
         settings.on_set_pinned(move |enabled| {
             if let (Some(c), Some(s)) = (cap.upgrade(), settings_weak.upgrade()) {
-                origin.set(None);
                 set_mode(
                     if enabled { Mode::Pinned } else { Mode::Popup },
                     &pref,
                     &model,
                     &c,
                     &s,
+                    &origin,
                 );
             }
         });
@@ -557,7 +594,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 if let Some(c) = weak.upgrade() {
                     if c.window().is_visible() {
                         let preferences = prefs.borrow();
-                        place_capsule(&c, &preferences, None);
+                        place_capsule(&c, &preferences);
                         if let Some(d) = details.upgrade() {
                             if d.window().is_visible() {
                                 position_detail(&d, &c);
@@ -627,8 +664,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             value.saved_position = None;
             origin.set(None);
             if let Some(c) = cap.upgrade() {
-                if value.mode == Mode::Pinned {
-                    place_capsule(&c, &value, None);
+                if c.window().is_visible() || value.mode == Mode::Pinned {
+                    place_capsule(&c, &value);
+                    let position = c.window().position();
+                    value.saved_position = Some((position.x, position.y));
                 }
             }
             if let Some(s) = weak.upgrade() {
@@ -649,10 +688,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let mut value = pref.borrow_mut();
                 value.saved_position = None;
                 origin.set(None);
-                let _ = state::save(&value);
-                if value.mode == Mode::Pinned {
-                    place_capsule(&c, &value, None);
+                if c.window().is_visible() || value.mode == Mode::Pinned {
+                    place_capsule(&c, &value);
+                    let position = c.window().position();
+                    value.saved_position = Some((position.x, position.y));
                 }
+                let _ = state::save(&value);
             }
         });
     }
@@ -702,12 +743,71 @@ fn main() -> Result<(), Box<dyn Error>> {
         tray.show()?;
     }
     if initial.mode == Mode::Pinned {
-        show_capsule(&capsule, &initial, None);
+        show_capsule(&capsule, &preferences);
     }
 
     // Debug-only visual QA; does not exist in the Release application.
     #[cfg(debug_assertions)]
     if !qa_view.is_empty() {
+        if std::env::var_os("WACU_QA_POSITION").is_some() {
+            let cap = capsule.as_weak();
+            let settings = settings.as_weak();
+            let tray = tray.as_weak();
+            let origin = edge_origin.clone();
+            let prefs = preferences.clone();
+            Timer::single_shot(Duration::from_millis(200), move || {
+                let c = cap.upgrade().unwrap();
+                let s = settings.upgrade().unwrap();
+                let t = tray.upgrade().unwrap();
+                let size = capsule_dimensions(&c);
+                let current = c.window().position();
+                let area = platform_windows::work_area_at(Point {
+                    x: current.x,
+                    y: current.y,
+                });
+                let custom = constrain(
+                    Point {
+                        x: current.x - 60,
+                        y: current.y + 22,
+                    },
+                    size,
+                    area,
+                );
+                c.window()
+                    .set_position(PhysicalPosition::new(custom.x, custom.y));
+                let expect_position = |point: Point| {
+                    let actual = c.window().position();
+                    assert_eq!((actual.x, actual.y), (point.x, point.y));
+                };
+                // Capture a drag immediately, before the housekeeping save timer.
+                s.invoke_set_pinned(false);
+                t.invoke_tray_clicked();
+                expect_position(custom);
+                s.invoke_set_pinned(true);
+                expect_position(custom);
+                // Switching while edge-hidden must retain the visible origin.
+                origin.set(Some(custom));
+                c.window()
+                    .set_position(PhysicalPosition::new(area.right - 18, custom.y));
+                s.invoke_set_pinned(false);
+                t.invoke_tray_clicked();
+                expect_position(custom);
+                // Side selection applies immediately in Popup and survives switching.
+                s.invoke_set_dock_side(1);
+                let left = docked(size, area, true);
+                expect_position(left);
+                s.invoke_set_pinned(true);
+                expect_position(left);
+                s.invoke_set_pinned(false);
+                t.invoke_tray_clicked();
+                expect_position(left);
+                assert_eq!(prefs.borrow().saved_position, Some((left.x, left.y)));
+                assert_eq!(state::load().saved_position, Some((left.x, left.y)));
+                eprintln!(
+                    "WACU_QA position_pass drag, popup, pinned, edge-hidden, dock-left, saved"
+                );
+            });
+        }
         if qa_view == "settings" && std::env::var_os("WACU_QA_INPUT").is_some() {
             // The capture script supplies an isolated APPDATA for this input case.
             let expected = std::env::current_dir()?
@@ -905,7 +1005,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             if prefs.borrow().mode == Mode::Popup {
                 if origin.take().is_some() {
-                    place_capsule(&c, &prefs.borrow(), None);
+                    place_capsule(&c, &prefs.borrow());
                 }
                 // Windows may temporarily retain focus on the taskbar overflow/menu.
                 // Give a newly opened popup time to receive focus and let pointer hover
@@ -986,7 +1086,9 @@ mod tests {
     #[test]
     fn demo_arc_is_generated() {
         assert!(arc_svg(76).as_str().contains("A 24 24"));
-        assert!(arc_svg(0).as_str().contains("M 56 56"));
+        assert!(arc_svg(0).is_empty());
+        assert!(arc_svg(100).as_str().ends_with('Z'));
+        assert!(!arc_svg(76).as_str().contains("L 0 0"));
     }
 
     #[test]

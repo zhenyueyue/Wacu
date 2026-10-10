@@ -23,20 +23,6 @@ pub fn constrain(position: Point, size: (i32, i32), area: WorkArea) -> Point {
     }
 }
 
-pub fn popup(anchor: Point, size: (i32, i32), area: WorkArea) -> Point {
-    let above = anchor.y - size.1 - 12;
-    let below = anchor.y + 16;
-    let y = if above >= area.top { above } else { below };
-    constrain(
-        Point {
-            x: anchor.x - size.0 / 2,
-            y,
-        },
-        size,
-        area,
-    )
-}
-
 pub fn pinned(size: (i32, i32), area: WorkArea) -> Point {
     constrain(
         Point {
@@ -92,7 +78,7 @@ pub fn edge_position(
 mod tests {
     use super::*;
     #[test]
-    fn popup_stays_on_screen() {
+    fn shared_position_stays_on_screen_after_resize() {
         let a = WorkArea {
             left: 0,
             top: 0,
@@ -100,7 +86,7 @@ mod tests {
             bottom: 1040,
         };
         assert_eq!(
-            popup(Point { x: 1900, y: 1060 }, (104, 440), a),
+            constrain(Point { x: 1900, y: 1060 }, (104, 440), a),
             Point { x: 1816, y: 600 }
         );
     }

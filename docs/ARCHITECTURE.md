@@ -11,20 +11,23 @@
 
 ```
 Cargo.toml                  # 唯一 Rust 工程
-build.rs                    # Slint UI 编译
+build.rs                    # Slint UI 编译与 Windows 图标资源嵌入
 ui/wacu.slint               # 胶囊、详情、设置、系统托盘
-assets/tray.svg             # 内嵌品牌图标
+assets/app.ico              # EXE 多尺寸品牌图标
+assets/app-icon.png         # 窗口和托盘品牌图标
 assets/icons/               # 内嵌 SVG 线条图标与服务标记
 src/main.rs                 # UI 状态协调、事件和生命周期
+src/glow.rs                 # 连续高斯圆环光晕
 src/platform_windows.rs     # 小范围 Windows 原生 API 封装
 src/placement.rs            # 可测试的多屏工作区坐标算法
 src/state.rs                # 模式、位置和启用服务的 JSON 持久化
 scripts/capture-ui.ps1      # 隔离配置的原生界面快照检查
+scripts/check-position.ps1  # 隔离配置的两种模式共享位置检查
 ```
 
 ## 窗口
 
-- **CapsuleWindow**：透明背景、无边框、置顶、圆角胶囊。默认仅托盘，不启动就显示；常驻模式持久化位置。
+- **CapsuleWindow**：透明背景、无边框、置顶、圆角胶囊。默认仅托盘，不启动就显示；弹出和常驻共用持久化的桌面位置，切换时即时记录位置，贴边隐藏时记录正常可见位置。
 - **DetailWindow**：点选某项时弹出，显示多个额度说明及真实接入的预留状态。
 - **SettingsWindow**：常规／服务管理／外观／行为／关于，深色 Fluent 下拉框和滑杆。
 - **WacuTray**：Slint 自带 Windows Shell 系统托盘，保证隐藏窗口时后台事件循环仍存活。
