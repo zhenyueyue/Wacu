@@ -13,6 +13,7 @@ pub enum Mode {
 pub struct Preferences {
     pub mode: Mode,
     pub saved_position: Option<(i32, i32)>,
+    pub mini_position: Option<(i32, i32)>,
     pub shown: [bool; 3],
     pub animations_enabled: bool,
     pub opacity_percent: u8,
@@ -51,6 +52,7 @@ impl Default for Preferences {
         Self {
             mode: Mode::Popup,
             saved_position: None,
+            mini_position: None,
             shown: [true; 3],
             animations_enabled: true,
             opacity_percent: 95,

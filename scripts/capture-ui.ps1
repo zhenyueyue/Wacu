@@ -6,6 +6,7 @@ if (!(Test-Path -LiteralPath $exe)) { throw '请先运行 cargo build' }
 $configPath = Join-Path $env:APPDATA 'Wacu\preferences.json'
 $configBefore = if (Test-Path -LiteralPath $configPath) { (Get-FileHash -LiteralPath $configPath).Hash } else { $null }
 $cases = @(
+    @{ View = 'mini'; Name = 'mini'; Count = 3; MiniInput = 1 },
     @{ View = 'capsule'; Name = 'capsule'; Count = 3 },
     @{ View = 'capsule'; Name = 'capsule-compact'; Count = 3; Size = 0 },
     @{ View = 'capsule'; Name = 'capsule-spacious'; Count = 3; Size = 2 },
@@ -47,6 +48,7 @@ foreach ($case in $cases) {
     if ($case.ContainsKey('ServicePressed')) { $start.Environment['WACU_QA_SERVICE_PRESS'] = [string]$case.ServicePressed }
     if ($case.DragDetail) { $start.Environment['WACU_QA_DRAG_DETAIL'] = '1' }
     if ($case.DetailFade) { $start.Environment['WACU_QA_DETAIL_FADE'] = '1' }
+    if ($case.MiniInput) { $start.Environment['WACU_QA_MINI_INPUT'] = '1' }
     $start.Environment['WACU_QA_EXIT'] = '1'
     [void]$start.Environment.Remove('WACU_QA_INPUT')
     if ($case.Input) {
@@ -63,6 +65,7 @@ foreach ($case in $cases) {
         throw ('预览失败: ' + $case.Name + ' ' + $diagnostics)
     }
     if ($case.Input -and $diagnostics -notmatch 'WACU_QA input_pass') { throw ('输入检查未通过: ' + $diagnostics) }
+    if ($case.MiniInput -and $diagnostics -notmatch 'WACU_QA mini_toggle_drag_settings_pass') { throw ('Mini 交互检查未通过: ' + $diagnostics) }
     if ($case.DragDetail -and $diagnostics -notmatch 'WACU_QA detail_hide_restore_pass') {
         throw ('详情拖动恢复检查未通过: ' + $diagnostics)
     }

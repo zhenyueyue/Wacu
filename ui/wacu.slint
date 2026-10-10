@@ -117,6 +117,68 @@ component QuotaItem inherits Rectangle {
     hit := TouchArea { mouse-cursor: pointer; clicked => { root.activated(); } }
 }
 
+// Always-on-top floating entry, independent of the Explorer notification area.
+export component MiniWindow inherits Window {
+    title: "Wacu Mini"; width: 66px; height: 66px;
+    background: transparent; no-frame: true; always-on-top: true;
+    default-font-family: "Segoe UI";
+    icon: @image-url("../assets/app-icon.png");
+    in property <bool> animated: true;
+    in-out property <bool> revealed: false;
+    in-out property <bool> dragging: false;
+    in-out property <bool> drag-triggered: false;
+    in-out property <length> down-x: 0px;
+    in-out property <length> down-y: 0px;
+    callback toggle-expanded();
+    callback start-drag();
+    callback open-settings();
+    Rectangle {
+        x: 5px; y: root.revealed ? 5px : 10px;
+        width: 56px; height: 56px; border-radius: 28px;
+        border-width: 1px;
+        border-color: touch.has-hover ? #5e796d : #414b49;
+        background: @linear-gradient(130deg, #252d2d 0%, #171b1d 100%);
+        opacity: root.revealed ? 1 : 0;
+        drop-shadow-blur: 9px; drop-shadow-color: #50000000;
+        drop-shadow-offset-y: 3px;
+        animate y, opacity { duration: root.animated ? 150ms : 0ms; easing: ease-out; }
+        Image {
+            width: root.dragging ? 39px : (touch.has-hover ? 44px : 42px);
+            height: self.width;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            source: @image-url("../assets/logo-spacious.png");
+            image-fit: contain;
+            animate width, height, x, y { duration: root.animated ? 120ms : 0ms; easing: ease-out; }
+        }
+    }
+    touch := TouchArea {
+        width: parent.width; height: parent.height;
+        mouse-cursor: pointer;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                root.down-x = self.mouse-x;
+                root.down-y = self.mouse-y;
+                root.drag-triggered = false;
+            }
+            if event.kind == PointerEventKind.down && event.button == PointerEventButton.right {
+                root.drag-triggered = true;
+                root.open-settings();
+            }
+        }
+        moved => {
+            if self.pressed && !root.drag-triggered &&
+                (self.mouse-x > root.down-x + 7px || self.mouse-x < root.down-x - 7px ||
+                 self.mouse-y > root.down-y + 7px || self.mouse-y < root.down-y - 7px) {
+                root.drag-triggered = true;
+                root.dragging = true;
+                root.start-drag();
+            }
+        }
+        clicked => { if !root.drag-triggered { root.toggle-expanded(); } }
+    }
+}
+
 export component CapsuleWindow inherits Window {
     title: "Wacu";
     in property <int> size-mode: 1;
@@ -136,6 +198,10 @@ export component CapsuleWindow inherits Window {
     in property <bool> animated: true;
     in property <float> surface-opacity: 0.95;
     in-out property <bool> logo-dragging: false;
+    in-out property <bool> logo-drag-triggered: false;
+    in-out property <length> logo-down-x: 0px;
+    in-out property <length> logo-down-y: 0px;
+    callback collapse-to-mini();
     in property <bool> preview-settings-pressed: false;
     in property <int> preview-pressed-service: -1;
     callback open-service(int);
@@ -180,10 +246,21 @@ export component CapsuleWindow inherits Window {
                         x: 0px; y: 0px; width: parent.width; height: parent.height; mouse-cursor: pointer;
                         pointer-event(event) => {
                             if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                                root.logo-down-x = self.mouse-x;
+                                root.logo-down-y = self.mouse-y;
+                                root.logo-drag-triggered = false;
+                            }
+                        }
+                        moved => {
+                            if self.pressed && !root.logo-drag-triggered &&
+                                (self.mouse-x > root.logo-down-x + 7px || self.mouse-x < root.logo-down-x - 7px ||
+                                 self.mouse-y > root.logo-down-y + 7px || self.mouse-y < root.logo-down-y - 7px) {
+                                root.logo-drag-triggered = true;
                                 root.logo-dragging = true;
                                 root.start-drag();
                             }
                         }
+                        clicked => { if !root.logo-drag-triggered { root.collapse-to-mini(); } }
                     }
                 }
             }
@@ -494,6 +571,7 @@ export component SettingsWindow inherits Window {
     callback set-dock-side(int);
     callback reset-position();
     callback open-link(int);
+    callback exit-app();
     Rectangle {
         x: (12px * Tokens.settings-scale); y: (12px * Tokens.settings-scale); width: parent.width - (24px * Tokens.settings-scale); height: parent.height - (24px * Tokens.settings-scale);
         border-radius: (12px * Tokens.settings-scale); border-width: 1px; border-color: #35353b;
@@ -531,8 +609,15 @@ export component SettingsWindow inherits Window {
                         if root.selected-page == 0: VerticalLayout {
                             spacing: 0px;
                             SettingSwitch { label: "开机启动"; hint: "系统启动时自动运行 Wacu"; checked: root.startup-on; animated: root.animations-on; changed(value) => { root.set-startup(value); } }
-                            SettingSwitch { label: "常驻显示"; hint: "在桌面侧边显示胶囊"; checked: root.pinned-mode; animated: root.animations-on; changed(value) => { root.set-pinned(value); } }
-                            SettingSwitch { label: "贴边隐藏"; hint: "靠近屏幕边缘时自动隐藏"; checked: root.edge-hide-on; animated: root.animations-on; changed(value) => { root.set-edge-hide(value); } }
+                            Rectangle {
+                                height: (62px * Tokens.settings-scale);
+                                Text {
+                                    x: 0px; height: parent.height; width: parent.width;
+                                    text: "悬浮 Mini：单击展开，点击胶囊顶部头像收起";
+                                    color: Tokens.secondary; font-size: (12px * Tokens.settings-scale);
+                                    wrap: word-wrap; vertical-alignment: center;
+                                }
+                            }
                             SettingSwitch { label: "显示动画"; hint: "启用界面动画效果"; checked: root.animations-on; animated: root.animations-on; changed(value) => { root.set-animations(value); } }
                             Rectangle { height: (8px * Tokens.settings-scale); }
                             Rectangle { height: 1px; background: Tokens.divider; }
@@ -613,7 +698,6 @@ export component SettingsWindow inherits Window {
                             spacing: (12px * Tokens.settings-scale);
                             SectionTitle { text: "行为"; }
                             SettingSwitch { label: "显示动画"; hint: "启用悬停、按下和展开过渡"; checked: root.animations-on; animated: root.animations-on; changed(value) => { root.set-animations(value); } }
-                            SettingSwitch { label: "贴边隐藏"; hint: "移到屏幕边缘可恢复胶囊"; checked: root.edge-hide-on; animated: root.animations-on; changed(value) => { root.set-edge-hide(value); } }
                             ActionRow { ui-scale: Tokens.settings-scale; caption: "恢复胶囊默认位置"; animated: root.animations-on; clicked => { root.reset-position(); } }
                             Text { height: (70px * Tokens.settings-scale); text: "按住顶部 Logo 可拖动悬浮窗。\n启动时先显示，弹出模式约 3 秒后收起。"; color: Tokens.secondary; font-size: (12px * Tokens.settings-scale); wrap: word-wrap; }
                         }
@@ -624,6 +708,7 @@ export component SettingsWindow inherits Window {
                             Text { height: (24px * Tokens.settings-scale); text: "版本 0.2.0"; color: Tokens.secondary; font-size: (12px * Tokens.settings-scale); }
                             Text { height: (64px * Tokens.settings-scale); text: "轻量、简洁、不打扰。\n用量数据与历史图表为演示，\n尚未连接真实账户。"; color: Tokens.secondary; font-size: (12px * Tokens.settings-scale); wrap: word-wrap; }
                             ActionRow { ui-scale: Tokens.settings-scale; caption: "开源项目"; icon: @image-url("../assets/icons/external.svg"); show-icon: true; animated: root.animations-on; clicked => { root.open-link(0); } }
+                            ActionRow { ui-scale: Tokens.settings-scale; caption: "退出 Wacu"; animated: root.animations-on; clicked => { root.exit-app(); } }
                         }
                         if root.status-message != "": Text { height: (32px * Tokens.settings-scale); text: root.status-message; color: #f59e0b; font-size: (11px * Tokens.settings-scale); wrap: word-wrap; }
                         Rectangle { vertical-stretch: 1; }

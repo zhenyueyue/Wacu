@@ -149,6 +149,82 @@ fn remember_position(
     }
 }
 
+// Mini and expanded capsule share the same desktop anchor at their centers.
+// Conversion always clamps the larger window inside its current monitor.
+fn mini_to_capsule(mini: Point, mini_size: (i32, i32), capsule_size: (i32, i32)) -> Point {
+    let center = Point {
+        x: mini.x + mini_size.0 / 2,
+        y: mini.y + mini_size.1 / 2,
+    };
+    let area = platform_windows::work_area_at(center);
+    constrain(
+        Point {
+            x: center.x - capsule_size.0 / 2,
+            y: center.y - capsule_size.1 / 2,
+        },
+        capsule_size,
+        area,
+    )
+}
+
+fn capsule_to_mini(capsule: Point, capsule_size: (i32, i32), mini_size: (i32, i32)) -> Point {
+    let center = Point {
+        x: capsule.x + capsule_size.0 / 2,
+        y: capsule.y + capsule_size.1 / 2,
+    };
+    let area = platform_windows::work_area_at(center);
+    constrain(
+        Point {
+            x: center.x - mini_size.0 / 2,
+            y: center.y - mini_size.1 / 2,
+        },
+        mini_size,
+        area,
+    )
+}
+
+fn remember_mini(mini: &MiniWindow, prefs: &Rc<RefCell<Preferences>>) {
+    let pos = mini.window().position();
+    let mut value = prefs.borrow_mut();
+    if value.mini_position == Some((pos.x, pos.y)) {
+        return;
+    }
+    value.mini_position = Some((pos.x, pos.y));
+    #[cfg(debug_assertions)]
+    if std::env::var_os("WACU_QA_VIEW").is_some() {
+        return;
+    }
+    if let Err(error) = state::save(&value) {
+        eprintln!("Saving Mini position: {error}");
+    }
+}
+
+fn show_mini(mini: &MiniWindow, prefs: &Rc<RefCell<Preferences>>) {
+    let size = mini.window().size();
+    let size = (size.width as i32, size.height as i32);
+    let position = if let Some((x, y)) = prefs.borrow().mini_position {
+        let area = platform_windows::work_area_at(Point { x, y });
+        constrain(Point { x, y }, size, area)
+    } else {
+        docked(
+            size,
+            platform_windows::work_area_at(platform_windows::cursor()),
+            prefs.borrow().dock_left,
+        )
+    };
+    mini.set_revealed(false);
+    mini.window()
+        .set_position(PhysicalPosition::new(position.x, position.y));
+    let _ = mini.show();
+    let weak = mini.as_weak();
+    Timer::single_shot(Duration::from_millis(25), move || {
+        if let Some(m) = weak.upgrade() {
+            platform_windows::configure_capsule(m.window());
+            m.set_revealed(true);
+        }
+    });
+}
+
 fn show_capsule(capsule: &CapsuleWindow, prefs: &Rc<RefCell<Preferences>>) {
     capsule.set_revealed(false);
     let _ = capsule.show();
@@ -390,6 +466,12 @@ fn qa_click(window: &slint::Window, x: f32, y: f32) {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let initial = state::load();
+    #[cfg(not(debug_assertions))]
+    let mini_active = true;
+    #[cfg(debug_assertions)]
+    let mini_active = std::env::var("WACU_QA_VIEW")
+        .map(|view| view.is_empty() || view == "mini")
+        .unwrap_or(true);
     #[cfg(debug_assertions)]
     let mut initial = initial;
     #[cfg(debug_assertions)]
@@ -454,9 +536,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let detail_motion = DetailMotion::default();
 
     let capsule = CapsuleWindow::new()?;
+    let mini = MiniWindow::new()?;
+    mini.set_animated(initial.animations_enabled);
     let settings = SettingsWindow::new()?;
     let detail = DetailWindow::new()?;
-    let tray = WacuTray::new()?;
+    #[cfg(debug_assertions)]
+    let tray = Some(WacuTray::new()?);
+    #[cfg(not(debug_assertions))]
+    let tray: Option<WacuTray> = None;
 
     let model = Rc::new(VecModel::from(
         visible_service_indices(&initial.shown)
@@ -466,61 +553,175 @@ fn main() -> Result<(), Box<dyn Error>> {
     capsule.set_services(ModelRc::from(model.clone()));
     refresh_model(&model, &capsule, &settings, &initial);
 
+    // Desktop Mini is the sole launcher in production. Switching windows does
+    // not allocate a second renderer, add a background thread, or use Explorer.
     {
-        let cap = capsule.as_weak();
-        let pref = preferences.clone();
-        let last_open = last_popup_open.clone();
-        let origin = edge_origin.clone();
-        let preview = startup_preview.clone();
-        tray.on_tray_clicked(move || {
-            preview.set(false);
-            #[cfg(debug_assertions)]
-            if std::env::var_os("WACU_QA").is_some() {
-                eprintln!("WACU_QA tray_clicked mode={:?}", pref.borrow().mode);
-            }
-            if let Some(c) = cap.upgrade() {
-                remember_position(&c, &pref, origin.take());
-                if !c.window().is_visible() {
-                    last_open.set(Instant::now());
-                }
-                toggle_capsule(&c, &pref);
+        let mini_weak = mini.as_weak();
+        let capsule_weak = capsule.as_weak();
+        mini.on_toggle_expanded(move || {
+            if let (Some(m), Some(c)) = (mini_weak.upgrade(), capsule_weak.upgrade()) {
+                let pos = m.window().position();
+                let size = m.window().size();
+                let target = mini_to_capsule(
+                    Point { x: pos.x, y: pos.y },
+                    (size.width as i32, size.height as i32),
+                    capsule_dimensions(&c),
+                );
+                m.set_revealed(false);
+                let _ = m.hide();
+                c.set_revealed(false);
+                c.window()
+                    .set_position(PhysicalPosition::new(target.x, target.y));
+                let _ = c.show();
+                let weak = c.as_weak();
+                Timer::single_shot(Duration::from_millis(25), move || {
+                    if let Some(c) = weak.upgrade() {
+                        platform_windows::configure_capsule(c.window());
+                        platform_windows::activate(c.window());
+                        c.set_revealed(true);
+                    }
+                });
             }
         });
     }
     {
-        let cap = capsule.as_weak();
-        let pref = preferences.clone();
-        let origin = edge_origin.clone();
-        let preview = startup_preview.clone();
-        tray.on_switch_mode({
-            let settings = settings.as_weak();
-            let model = model.clone();
-            move || {
-                if let (Some(c), Some(s)) = (cap.upgrade(), settings.upgrade()) {
-                    preview.set(false);
-                    let next = if pref.borrow().mode == Mode::Popup {
-                        Mode::Pinned
-                    } else {
-                        Mode::Popup
-                    };
-                    set_mode(next, &pref, &model, &c, &s, &origin);
+        let weak = mini.as_weak();
+        let prefs = preferences.clone();
+        mini.on_start_drag(move || {
+            let weak = weak.clone();
+            let prefs = prefs.clone();
+            Timer::single_shot(Duration::from_millis(15), move || {
+                if let Some(m) = weak.upgrade() {
+                    platform_windows::begin_drag(m.window());
+                    remember_mini(&m, &prefs);
+                    m.set_dragging(false);
                 }
-            }
+            });
         });
     }
     {
         let weak = settings.as_weak();
-        let preview = startup_preview.clone();
-        tray.on_show_settings(move || {
-            preview.set(false);
+        mini.on_open_settings(move || {
             if let Some(s) = weak.upgrade() {
                 show_settings(&s);
             }
         });
     }
-    tray.on_exit_app(|| {
-        let _ = slint::quit_event_loop();
-    });
+    {
+        let weak = mini.as_weak();
+        let cap = capsule.as_weak();
+        let detail = detail.as_weak();
+        let prefs = preferences.clone();
+        let motion = detail_motion.clone();
+        capsule.on_collapse_to_mini(move || {
+            if let (Some(c), Some(m)) = (cap.upgrade(), weak.upgrade()) {
+                if let Some(d) = detail.upgrade() {
+                    motion.next();
+                    motion.closing.set(false);
+                    d.set_revealed(false);
+                    let _ = d.hide();
+                }
+                c.set_selected_index(-1);
+                let pos = c.window().position();
+                let cs = capsule_dimensions(&c);
+                let size = m.window().size();
+                let target = capsule_to_mini(
+                    Point { x: pos.x, y: pos.y },
+                    cs,
+                    (size.width as i32, size.height as i32),
+                );
+                {
+                    let mut value = prefs.borrow_mut();
+                    value.mini_position = Some((target.x, target.y));
+                    #[cfg(debug_assertions)]
+                    let is_qa = std::env::var_os("WACU_QA_VIEW").is_some();
+                    #[cfg(not(debug_assertions))]
+                    let is_qa = false;
+                    if !is_qa {
+                        if let Err(err) = state::save(&value) {
+                            eprintln!("Saving Mini anchor: {err}");
+                        }
+                    }
+                }
+                c.set_revealed(false);
+                let weak_cap = c.as_weak();
+                let weak_mini = m.as_weak();
+                let prefs = prefs.clone();
+                let delay = if c.get_animated() { 185 } else { 0 };
+                Timer::single_shot(Duration::from_millis(delay), move || {
+                    if let Some(c) = weak_cap.upgrade() {
+                        let _ = c.hide();
+                    }
+                    if let Some(m) = weak_mini.upgrade() {
+                        show_mini(&m, &prefs);
+                    }
+                });
+            }
+        });
+    }
+    {
+        settings.on_exit_app(|| {
+            let _ = slint::quit_event_loop();
+        });
+    }
+
+    if let Some(tray) = tray.as_ref() {
+        {
+            let cap = capsule.as_weak();
+            let pref = preferences.clone();
+            let last_open = last_popup_open.clone();
+            let origin = edge_origin.clone();
+            let preview = startup_preview.clone();
+            tray.on_tray_clicked(move || {
+                preview.set(false);
+                #[cfg(debug_assertions)]
+                if std::env::var_os("WACU_QA").is_some() {
+                    eprintln!("WACU_QA tray_clicked mode={:?}", pref.borrow().mode);
+                }
+                if let Some(c) = cap.upgrade() {
+                    remember_position(&c, &pref, origin.take());
+                    if !c.window().is_visible() {
+                        last_open.set(Instant::now());
+                    }
+                    toggle_capsule(&c, &pref);
+                }
+            });
+        }
+        {
+            let cap = capsule.as_weak();
+            let pref = preferences.clone();
+            let origin = edge_origin.clone();
+            let preview = startup_preview.clone();
+            tray.on_switch_mode({
+                let settings = settings.as_weak();
+                let model = model.clone();
+                move || {
+                    if let (Some(c), Some(s)) = (cap.upgrade(), settings.upgrade()) {
+                        preview.set(false);
+                        let next = if pref.borrow().mode == Mode::Popup {
+                            Mode::Pinned
+                        } else {
+                            Mode::Popup
+                        };
+                        set_mode(next, &pref, &model, &c, &s, &origin);
+                    }
+                }
+            });
+        }
+        {
+            let weak = settings.as_weak();
+            let preview = startup_preview.clone();
+            tray.on_show_settings(move || {
+                preview.set(false);
+                if let Some(s) = weak.upgrade() {
+                    show_settings(&s);
+                }
+            });
+        }
+        tray.on_exit_app(|| {
+            let _ = slint::quit_event_loop();
+        });
+    }
     {
         let weak = settings.as_weak();
         let preview = startup_preview.clone();
@@ -712,6 +913,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let pref = preferences.clone();
         let settings_weak = settings.as_weak();
         let detail_weak = detail.as_weak();
+        let mini_weak = mini.as_weak();
         settings.on_set_animations(move |enabled| {
             let mut value = pref.borrow_mut();
             value.animations_enabled = enabled;
@@ -720,6 +922,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             if let Some(c) = cap.upgrade() {
                 c.set_animated(enabled);
+            }
+            if let Some(m) = mini_weak.upgrade() {
+                m.set_animated(enabled);
             }
             if let Some(s) = settings_weak.upgrade() {
                 s.set_animations_on(enabled);
@@ -781,8 +986,16 @@ fn main() -> Result<(), Box<dyn Error>> {
             Timer::single_shot(Duration::from_millis(40), move || {
                 if let Some(c) = weak.upgrade() {
                     if c.window().is_visible() {
-                        let preferences = prefs.borrow();
-                        place_capsule(&c, &preferences);
+                        if mini_active {
+                            let pos = c.window().position();
+                            let size = capsule_dimensions(&c);
+                            let area = platform_windows::work_area_at(Point { x: pos.x, y: pos.y });
+                            let target = constrain(Point { x: pos.x, y: pos.y }, size, area);
+                            c.window()
+                                .set_position(PhysicalPosition::new(target.x, target.y));
+                        } else {
+                            place_capsule(&c, &prefs.borrow());
+                        }
                         if let Some(d) = details.upgrade() {
                             if d.window().is_visible() {
                                 position_detail(&d, &c);
@@ -846,12 +1059,31 @@ fn main() -> Result<(), Box<dyn Error>> {
         let pref = preferences.clone();
         let weak = settings.as_weak();
         let origin = edge_origin.clone();
+        let mini_weak = mini.as_weak();
         settings.on_set_dock_side(move |index| {
             let mut value = pref.borrow_mut();
             value.dock_left = index == 1;
             value.saved_position = None;
+            value.mini_position = None;
             origin.set(None);
-            if let Some(c) = cap.upgrade() {
+            if mini_active {
+                if let Some(m) = mini_weak.upgrade() {
+                    let size = m.window().size();
+                    let size = (size.width as i32, size.height as i32);
+                    let pos = docked(
+                        size,
+                        platform_windows::work_area_at(platform_windows::cursor()),
+                        value.dock_left,
+                    );
+                    m.window().set_position(PhysicalPosition::new(pos.x, pos.y));
+                    value.mini_position = Some((pos.x, pos.y));
+                    if let Some(c) = cap.upgrade().filter(|c| c.window().is_visible()) {
+                        let target = mini_to_capsule(pos, size, capsule_dimensions(&c));
+                        c.window()
+                            .set_position(PhysicalPosition::new(target.x, target.y));
+                    }
+                }
+            } else if let Some(c) = cap.upgrade() {
                 if c.window().is_visible() || value.mode == Mode::Pinned {
                     place_capsule(&c, &value);
                     let position = c.window().position();
@@ -871,12 +1103,34 @@ fn main() -> Result<(), Box<dyn Error>> {
         let cap = capsule.as_weak();
         let pref = preferences.clone();
         let origin = edge_origin.clone();
+        let mini_weak = mini.as_weak();
         settings.on_reset_position(move || {
             if let Some(c) = cap.upgrade() {
                 let mut value = pref.borrow_mut();
                 value.saved_position = None;
+                value.mini_position = None;
                 origin.set(None);
-                if c.window().is_visible() || value.mode == Mode::Pinned {
+                if mini_active {
+                    if let Some(m) = mini_weak.upgrade() {
+                        let size = m.window().size();
+                        let pos = docked(
+                            (size.width as i32, size.height as i32),
+                            platform_windows::work_area_at(platform_windows::cursor()),
+                            value.dock_left,
+                        );
+                        m.window().set_position(PhysicalPosition::new(pos.x, pos.y));
+                        value.mini_position = Some((pos.x, pos.y));
+                        if c.window().is_visible() {
+                            let target = mini_to_capsule(
+                                pos,
+                                (size.width as i32, size.height as i32),
+                                capsule_dimensions(&c),
+                            );
+                            c.window()
+                                .set_position(PhysicalPosition::new(target.x, target.y));
+                        }
+                    }
+                } else if c.window().is_visible() || value.mode == Mode::Pinned {
                     place_capsule(&c, &value);
                     let position = c.window().position();
                     value.saved_position = Some((position.x, position.y));
@@ -919,20 +1173,26 @@ fn main() -> Result<(), Box<dyn Error>> {
         });
     }
 
-    // A visible native tray keeps Slint's event loop running while windows are hidden.
+    // Production uses a real floating Mini window. No notification-area icon.
     #[cfg(not(debug_assertions))]
-    let show_tray = true;
+    let show_tray = false;
     #[cfg(debug_assertions)]
     let show_tray = !matches!(
         qa_view.as_str(),
         "capsule" | "quick" | "detail" | "settings"
     );
     if show_tray {
-        tray.show()?;
+        if let Some(tray) = tray.as_ref() {
+            tray.show()?;
+        }
     }
-    startup_preview.set(initial.mode == Mode::Popup);
+    startup_preview.set(!mini_active && initial.mode == Mode::Popup);
     last_popup_open.set(Instant::now());
-    show_capsule(&capsule, &preferences);
+    if mini_active {
+        show_mini(&mini, &preferences);
+    } else {
+        show_capsule(&capsule, &preferences);
+    }
 
     // Debug-only visual QA; does not exist in the Release application.
     #[cfg(debug_assertions)]
@@ -974,7 +1234,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         if std::env::var_os("WACU_QA_POSITION").is_some() {
             let cap = capsule.as_weak();
             let settings = settings.as_weak();
-            let tray = tray.as_weak();
+            let tray = tray.as_ref().expect("Debug tray QA").as_weak();
             let origin = edge_origin.clone();
             let prefs = preferences.clone();
             let detail = detail.as_weak();
@@ -1103,7 +1363,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         button: PointerEventButton::Left,
                     });
                     platform_windows::release_drag_input(s.window());
-                    qa_click(s.window(), 250.0, 330.0);
+                    qa_click(s.window(), 250.0, 284.0);
                 }
             });
             let s = settings.as_weak();
@@ -1111,8 +1371,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 use slint::platform::{Key, PointerEventButton, WindowEvent};
                 let s = s.upgrade().unwrap();
                 let previous = s.get_opacity_percent();
-                let start = slint::LogicalPosition::new(250.0, 330.0);
-                let end = slint::LogicalPosition::new(300.0, 330.0);
+                let start = slint::LogicalPosition::new(250.0, 284.0);
+                let end = slint::LogicalPosition::new(300.0, 284.0);
                 s.window().dispatch_event(WindowEvent::PointerPressed {
                     position: start,
                     button: PointerEventButton::Left,
@@ -1124,7 +1384,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     button: PointerEventButton::Left,
                 });
                 assert!(s.get_opacity_percent() > previous, "Slider drag failed");
-                qa_click(s.window(), 250.0, 330.0);
+                qa_click(s.window(), 250.0, 284.0);
                 let previous = s.get_opacity_percent();
                 s.window().dispatch_event(WindowEvent::KeyPressed {
                     text: Key::RightArrow.into(),
@@ -1136,12 +1396,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                     s.get_opacity_percent() > previous,
                     "Slider keyboard focus failed"
                 );
-                qa_click(s.window(), 250.0, 330.0);
+                qa_click(s.window(), 250.0, 284.0);
             });
             let s = settings.as_weak();
             Timer::single_shot(Duration::from_millis(400), move || {
                 if let Some(s) = s.upgrade() {
-                    qa_click(s.window(), 325.0, 374.0);
+                    qa_click(s.window(), 325.0, 328.0);
                 }
             });
             let s = settings.as_weak();
@@ -1207,6 +1467,76 @@ fn main() -> Result<(), Box<dyn Error>> {
             capsule.set_selected_index(selected);
         }
         match qa_view.as_str() {
+            "mini" => {
+                if std::env::var_os("WACU_QA_MINI_INPUT").is_some() {
+                    let m = mini.as_weak();
+                    let c = capsule.as_weak();
+                    let settings = settings.as_weak();
+                    Timer::single_shot(Duration::from_millis(220), move || {
+                        use slint::platform::{PointerEventButton, WindowEvent};
+                        let m = m.upgrade().unwrap();
+                        let c = c.upgrade().unwrap();
+                        let settings = settings.upgrade().unwrap();
+                        assert!(m.window().is_visible());
+                        assert!(!c.window().is_visible());
+                        qa_click(m.window(), 33.0, 33.0);
+                        assert!(c.window().is_visible(), "Mini click must expand");
+                        assert!(!m.window().is_visible(), "Mini must hide when expanded");
+                        // Top avatar is a click target, but drag remains on >7px motion.
+                        qa_click(c.window(), 48.0, 49.0);
+                        let m2 = m.as_weak();
+                        let c2 = c.as_weak();
+                        Timer::single_shot(Duration::from_millis(300), move || {
+                            let m = m2.upgrade().unwrap();
+                            let c = c2.upgrade().unwrap();
+                            assert!(
+                                m.window().is_visible(),
+                                "Second click must collapse to Mini"
+                            );
+                            assert!(!c.window().is_visible());
+                            let calls = Rc::new(Cell::new(0));
+                            let captured = calls.clone();
+                            m.on_start_drag(move || captured.set(captured.get() + 1));
+                            let start = slint::LogicalPosition::new(33.0, 33.0);
+                            let end = slint::LogicalPosition::new(45.0, 33.0);
+                            m.window()
+                                .dispatch_event(WindowEvent::PointerMoved { position: start });
+                            m.window().dispatch_event(WindowEvent::PointerPressed {
+                                position: start,
+                                button: PointerEventButton::Left,
+                            });
+                            m.window()
+                                .dispatch_event(WindowEvent::PointerMoved { position: end });
+                            m.window().dispatch_event(WindowEvent::PointerReleased {
+                                position: end,
+                                button: PointerEventButton::Left,
+                            });
+                            assert_eq!(calls.get(), 1, "Mini drag threshold failed");
+                            assert!(m.window().is_visible(), "Drag must not expand the capsule");
+                            m.set_dragging(false);
+                            // Right click provides settings without needing the tray.
+                            m.window().dispatch_event(WindowEvent::PointerPressed {
+                                position: start,
+                                button: PointerEventButton::Right,
+                            });
+                            m.window().dispatch_event(WindowEvent::PointerReleased {
+                                position: start,
+                                button: PointerEventButton::Right,
+                            });
+                            assert!(
+                                settings.window().is_visible(),
+                                "Mini right click must show settings"
+                            );
+                            assert!(m.window().is_visible(), "Right click must keep Mini open");
+                            assert!(
+                                !c.window().is_visible(),
+                                "Right click must not expand capsule"
+                            );
+                            eprintln!("WACU_QA mini_toggle_drag_settings_pass");
+                        });
+                    });
+                }
+            }
             "quick" | "detail" => {
                 show_detail(&detail, &capsule, 1, &initial, &detail_motion);
                 if std::env::var_os("WACU_QA_DETAIL_FADE").is_some() {
@@ -1364,14 +1694,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     #[cfg(debug_assertions)]
     if matches!(
         qa_view.as_str(),
-        "capsule" | "quick" | "detail" | "settings"
+        "mini" | "capsule" | "quick" | "detail" | "settings"
     ) {
         let mode = qa_view.clone();
+        let m = mini.as_weak();
         let c = capsule.as_weak();
         let d = detail.as_weak();
         let s = settings.as_weak();
         Timer::single_shot(Duration::from_millis(900), move || {
             let snapshot = match mode.as_str() {
+                "mini" => m
+                    .upgrade()
+                    .and_then(|window| window.window().take_snapshot().ok()),
                 "capsule" => c
                     .upgrade()
                     .and_then(|window| window.window().take_snapshot().ok()),
@@ -1454,6 +1788,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
             if !c.window().is_visible() {
+                return;
+            }
+            // Mini mode expands only on click; never auto-dismiss the capsule.
+            if mini_active {
                 return;
             }
             if prefs.borrow().mode == Mode::Popup {
