@@ -51,16 +51,16 @@ component QuotaItem inherits Rectangle {
     property <bool> is-pressed: hit.pressed || root.preview-pressed;
     callback activated();
     in property <int> size-mode: 1;
-    property <length> ring-width: root.size-mode == 0 ? 3px : (root.size-mode == 1 ? 4px : 5px);
+    property <length> ring-width: root.size-mode == 0 ? 4px : (root.size-mode == 1 ? 4.5px : 5px);
     property <string> ring-path: "M 28 4 A 24 24 0 1 1 28 52 A 24 24 0 1 1 28 4 Z";
-    width: root.size-mode == 0 ? 40px : (root.size-mode == 1 ? 56px : 72px);
-    height: root.size-mode == 0 ? 52px : (root.size-mode == 1 ? 70px : 84px);
+    width: root.size-mode == 0 ? 56px : (root.size-mode == 1 ? 64px : 72px);
+    height: root.size-mode == 0 ? 70px : (root.size-mode == 1 ? 77px : 84px);
     border-radius: root.width / 2;
     // Keep the item surface clear: feedback belongs to the circular meter, not an oval row.
     background: transparent;
     Rectangle {
         x: (parent.width - self.width) / 2; y: 0px;
-        width: root.size-mode == 0 ? 36px : (root.size-mode == 1 ? 50px : 62px);
+        width: root.size-mode == 0 ? 50px : (root.size-mode == 1 ? 56px : 62px);
         height: self.width; border-radius: self.width / 2;
         background: transparent;
         Image {
@@ -87,7 +87,7 @@ component QuotaItem inherits Rectangle {
         Rectangle {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            width: root.size-mode == 0 ? 20px : (root.size-mode == 1 ? 28px : 36px);
+            width: root.size-mode == 0 ? 28px : (root.size-mode == 1 ? 32px : 36px);
             height: self.width; border-radius: self.width / 2;
             background: root.service.source-index == 1 ? (root.is-pressed ? #f3764f : #ff7042) : (root.is-pressed ? root.service.accent.darker(8%) : root.service.accent);
             animate background { duration: root.animated ? 120ms : 0ms; easing: ease-out; }
@@ -107,10 +107,10 @@ component QuotaItem inherits Rectangle {
         }
     }
     Text {
-        x: 0px; y: root.size-mode == 0 ? 33px : (root.size-mode == 1 ? 45px : 57px);
-        width: parent.width; height: root.size-mode == 0 ? 15px : 19px;
+        x: 0px; y: root.size-mode == 0 ? 45px : (root.size-mode == 1 ? 51px : 57px);
+        width: parent.width; height: 19px;
         text: root.service.percent + "%";
-        font-size: root.size-mode == 0 ? 12px : (root.size-mode == 1 ? 14px : 16px);
+        font-size: root.size-mode == 0 ? 14px : (root.size-mode == 1 ? 15px : 16px);
         font-family: "Bahnschrift"; font-weight: 500; color: Tokens.text;
         horizontal-alignment: center; vertical-alignment: center;
     }
@@ -120,12 +120,12 @@ component QuotaItem inherits Rectangle {
 export component CapsuleWindow inherits Window {
     title: "Wacu";
     in property <int> size-mode: 1;
-    width: root.size-mode == 0 ? 72px : (root.size-mode == 1 ? 88px : 104px);
-    property <length> item-height: root.size-mode == 0 ? 52px : (root.size-mode == 1 ? 70px : 84px);
-    property <length> settings-height: root.size-mode == 0 ? 16px : (root.size-mode == 1 ? 20px : 24px);
-    property <length> settings-button-size: root.size-mode == 0 ? 32px : (root.size-mode == 1 ? 40px : 48px);
-    property <length> logo-size: root.size-mode == 0 ? 32px : (root.size-mode == 1 ? 40px : 48px);
-    property <length> area-gap: root.size-mode == 0 ? 12px : (root.size-mode == 1 ? 16px : 20px);
+    width: root.size-mode == 0 ? 88px : (root.size-mode == 1 ? 96px : 104px);
+    property <length> item-height: root.size-mode == 0 ? 70px : (root.size-mode == 1 ? 77px : 84px);
+    property <length> settings-height: root.size-mode == 0 ? 20px : (root.size-mode == 1 ? 22px : 24px);
+    property <length> settings-button-size: root.size-mode == 0 ? 40px : (root.size-mode == 1 ? 44px : 48px);
+    property <length> logo-size: root.size-mode == 0 ? 40px : (root.size-mode == 1 ? 44px : 48px);
+    property <length> area-gap: root.size-mode == 0 ? 16px : (root.size-mode == 1 ? 18px : 20px);
     height: 56px + root.logo-size + root.area-gap * 2 + root.settings-button-size + root.item-height * max(1, visible-count);
     background: transparent; no-frame: true; always-on-top: true; default-font-family: "Segoe UI";
     icon: @image-url("../assets/app-icon.png");
@@ -170,7 +170,9 @@ export component CapsuleWindow inherits Window {
                         height: self.width;
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
-                        source: root.size-mode == 0 ? @image-url("../assets/logo-compact.png") : (root.size-mode == 1 ? @image-url("../assets/logo-standard.png") : @image-url("../assets/logo-spacious.png"));
+                        // The former standard art now serves compact; use the larger
+                        // source for the in-between 44px logo to keep edges crisp.
+                        source: root.size-mode == 0 ? @image-url("../assets/logo-standard.png") : @image-url("../assets/logo-spacious.png");
                         image-fit: contain; image-rendering: smooth;
                         animate width, height, x, y { duration: root.animated ? 125ms : 0ms; easing: ease-out; }
                     }
@@ -188,7 +190,7 @@ export component CapsuleWindow inherits Window {
             Rectangle { height: root.area-gap; }
             if root.visible-count == 0: Rectangle {
                 height: root.item-height;
-                Text { text: "未启用\n服务"; color: Tokens.secondary; font-size: root.size-mode == 0 ? 10px : (root.size-mode == 1 ? 12px : 14px); horizontal-alignment: center; vertical-alignment: center; }
+                Text { text: "未启用\n服务"; color: Tokens.secondary; font-size: root.size-mode == 0 ? 12px : (root.size-mode == 1 ? 13px : 14px); horizontal-alignment: center; vertical-alignment: center; }
             }
             for service in root.services: QuotaItem {
                 service: service; size-mode: root.size-mode;
@@ -203,7 +205,7 @@ export component CapsuleWindow inherits Window {
                 IconButton {
                     circular: true;
                     preview-pressed: root.preview-settings-pressed;
-                    ui-scale: root.size-mode == 0 ? 1 : (root.size-mode == 1 ? 1.25 : 1.5);
+                    ui-scale: root.size-mode == 0 ? 1.25 : (root.size-mode == 1 ? 1.375 : 1.5);
                     icon-size: root.settings-height;
                     icon: @image-url("../assets/icons/settings.svg");
                     animated: root.animated;

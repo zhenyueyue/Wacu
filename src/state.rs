@@ -16,10 +16,34 @@ pub struct Preferences {
     pub shown: [bool; 3],
     pub animations_enabled: bool,
     pub opacity_percent: u8,
-    // 0 = compact, 1 = standard (default), 2 = spacious
+    // 0 = compact (former standard), 1 = standard (new midpoint), 2 = spacious.
     pub capsule_size: u8,
+    // Old files without a version used index 1 for the 88px size.
+    #[serde(default = "legacy_size_preset_version")]
+    pub size_preset_version: u8,
     pub edge_hide: bool,
     pub dock_left: bool,
+}
+
+const CURRENT_SIZE_PRESET_VERSION: u8 = 2;
+
+fn legacy_size_preset_version() -> u8 {
+    1
+}
+
+impl Preferences {
+    fn migrate_size_preset(&mut self) {
+        if self.size_preset_version < CURRENT_SIZE_PRESET_VERSION {
+            // The old 88px standard is the new compact; old spacious remains
+            // spacious. Retired 72px compact has no identical preset.
+            self.capsule_size = match self.capsule_size {
+                0 | 1 => 0,
+                _ => 2,
+            };
+            self.size_preset_version = CURRENT_SIZE_PRESET_VERSION;
+        }
+        self.capsule_size = self.capsule_size.min(2);
+    }
 }
 
 impl Default for Preferences {
@@ -31,6 +55,7 @@ impl Default for Preferences {
             animations_enabled: true,
             opacity_percent: 95,
             capsule_size: 1,
+            size_preset_version: CURRENT_SIZE_PRESET_VERSION,
             edge_hide: false,
             dock_left: false,
         }
@@ -49,7 +74,9 @@ pub fn load() -> Preferences {
     let Ok(data) = fs::read(config_path()) else {
         return Preferences::default();
     };
-    serde_json::from_slice::<Preferences>(&data).unwrap_or_default()
+    let mut prefs = serde_json::from_slice::<Preferences>(&data).unwrap_or_default();
+    prefs.migrate_size_preset();
+    prefs
 }
 
 pub fn save(prefs: &Preferences) -> Result<(), String> {
@@ -74,8 +101,33 @@ mod tests {
         assert!(prefs.animations_enabled);
         assert_eq!(prefs.opacity_percent, 95);
         assert_eq!(prefs.capsule_size, 1);
+        assert_eq!(prefs.size_preset_version, 1);
         assert!(!prefs.edge_hide);
         assert!(!prefs.dock_left);
+    }
+
+    #[test]
+    fn old_standard_preset_preserves_exact_display_size() {
+        let mut legacy: Preferences =
+            serde_json::from_str(r#"{"capsule_size":1,"mode":"pinned"}"#).unwrap();
+        assert_eq!(legacy.size_preset_version, 1);
+        legacy.migrate_size_preset();
+        assert_eq!(legacy.capsule_size, 0); // old standard 88px is now compact
+        assert_eq!(legacy.size_preset_version, CURRENT_SIZE_PRESET_VERSION);
+        let mut reloaded: Preferences =
+            serde_json::from_str(&serde_json::to_string(&legacy).unwrap()).unwrap();
+        reloaded.migrate_size_preset();
+        assert_eq!(reloaded.capsule_size, 0); // idempotent
+    }
+
+    #[test]
+    fn old_spacious_stays_spacious_and_new_default_is_midpoint() {
+        let mut legacy: Preferences = serde_json::from_str(r#"{"capsule_size":2}"#).unwrap();
+        legacy.migrate_size_preset();
+        assert_eq!(legacy.capsule_size, 2);
+        let fresh = Preferences::default();
+        assert_eq!(fresh.capsule_size, 1);
+        assert_eq!(fresh.size_preset_version, CURRENT_SIZE_PRESET_VERSION);
     }
 
     #[test]
@@ -91,6 +143,7 @@ mod tests {
         assert!(!restored.animations_enabled);
         assert_eq!(restored.opacity_percent, 72);
         assert_eq!(restored.capsule_size, 2);
+        assert_eq!(restored.size_preset_version, CURRENT_SIZE_PRESET_VERSION);
         assert!(restored.edge_hide);
         assert!(restored.dock_left);
         assert_eq!(restored.mode, Mode::Popup);
