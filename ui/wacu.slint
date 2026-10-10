@@ -132,7 +132,6 @@ export component CapsuleWindow inherits Window {
     in-out property <bool> revealed: false;
     in property <bool> animated: true;
     in property <float> surface-opacity: 0.95;
-    in property <bool> is-pinned: false;
     callback open-service(int);
     callback open-settings();
     callback start-drag();
@@ -145,7 +144,7 @@ export component CapsuleWindow inherits Window {
         drop-shadow-blur: 14px; drop-shadow-offset-y: 4px; drop-shadow-color: root.selected-index >= 0 ? #3b82f633 : #00000050;
         animate y, opacity { duration: root.animated ? 200ms : 0ms; easing: ease-out; }
         TouchArea {
-            width: parent.width; height: 16px; enabled: root.is-pinned; mouse-cursor: grab;
+            width: parent.width; height: 16px; mouse-cursor: grab;
             pointer-event(event) => { if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) { root.start-drag(); } }
         }
         VerticalLayout {
@@ -160,7 +159,7 @@ export component CapsuleWindow inherits Window {
                         image-fit: contain; image-rendering: smooth;
                     }
                     TouchArea {
-                        enabled: root.is-pinned; mouse-cursor: grab;
+                        mouse-cursor: grab;
                         pointer-event(event) => { if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) { root.start-drag(); } }
                     }
                 }
@@ -569,7 +568,7 @@ export component SettingsWindow inherits Window {
                             SettingSwitch { label: "显示动画"; hint: "启用悬停、按下和展开过渡"; checked: root.animations-on; animated: root.animations-on; changed(value) => { root.set-animations(value); } }
                             SettingSwitch { label: "贴边隐藏"; hint: "移到屏幕边缘可恢复胶囊"; checked: root.edge-hide-on; animated: root.animations-on; changed(value) => { root.set-edge-hide(value); } }
                             ActionRow { ui-scale: Tokens.settings-scale; caption: "恢复胶囊默认位置"; animated: root.animations-on; clicked => { root.reset-position(); } }
-                            Text { height: (70px * Tokens.settings-scale); text: "弹出模式下，点击空白处收起。\n常驻模式可按住胶囊顶端拖动。"; color: Tokens.secondary; font-size: (12px * Tokens.settings-scale); wrap: word-wrap; }
+                            Text { height: (70px * Tokens.settings-scale); text: "按住顶部 Logo 可拖动悬浮窗。\n启动时先显示，弹出模式约 3 秒后收起。"; color: Tokens.secondary; font-size: (12px * Tokens.settings-scale); wrap: word-wrap; }
                         }
                         if root.selected-page == 4: VerticalLayout {
                             spacing: (16px * Tokens.settings-scale);

@@ -87,7 +87,6 @@ fn refresh_model(
     settings.set_show_claude(prefs.shown[1]);
     settings.set_show_workbuddy(prefs.shown[2]);
     settings.set_pinned_mode(prefs.mode == Mode::Pinned);
-    capsule.set_is_pinned(prefs.mode == Mode::Pinned);
     capsule.set_animated(prefs.animations_enabled);
     capsule.set_surface_opacity(prefs.opacity_percent.clamp(65, 100) as f32 / 100.0);
     settings.set_animations_on(prefs.animations_enabled);
@@ -179,6 +178,23 @@ fn toggle_capsule(capsule: &CapsuleWindow, prefs: &Rc<RefCell<Preferences>>) {
         });
     } else {
         show_capsule(capsule, prefs);
+    }
+}
+
+fn should_hide_popup(
+    elapsed: Duration,
+    startup_preview: bool,
+    foreground: bool,
+    hovered: bool,
+    detail_active: bool,
+) -> bool {
+    if hovered || detail_active {
+        return false;
+    }
+    if startup_preview {
+        elapsed >= Duration::from_secs(3)
+    } else {
+        elapsed > Duration::from_millis(1500) && !foreground
     }
 }
 
@@ -283,6 +299,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     #[cfg(debug_assertions)]
     let qa_view = std::env::var("WACU_QA_VIEW").unwrap_or_default();
     #[cfg(debug_assertions)]
+    if let Ok(mode) = std::env::var("WACU_QA_STARTUP") {
+        let expected = std::env::current_dir()?.join("target/qa-startup-profile");
+        let actual = std::env::var("APPDATA")
+            .unwrap_or_default()
+            .replace('/', "\\");
+        if qa_view != "capsule"
+            || !matches!(mode.as_str(), "popup" | "pinned")
+            || !actual.eq_ignore_ascii_case(&expected.to_string_lossy().replace('/', "\\"))
+        {
+            return Err("Startup QA requires an isolated APPDATA".into());
+        }
+    }
+    #[cfg(debug_assertions)]
     if std::env::var_os("WACU_QA_POSITION").is_some() {
         let expected = std::env::current_dir()?.join("target/qa-position-profile");
         let actual = std::env::var("APPDATA")
@@ -303,6 +332,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             mode: Mode::Pinned,
             ..Preferences::default()
         };
+        if std::env::var("WACU_QA_STARTUP").as_deref() == Ok("popup") {
+            initial.mode = Mode::Popup;
+        }
         initial.capsule_size = std::env::var("WACU_QA_SIZE")
             .ok()
             .and_then(|value| value.parse::<u8>().ok())
@@ -321,6 +353,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let preferences = Rc::new(RefCell::new(initial.clone()));
     let edge_origin = Rc::new(Cell::new(None::<Point>));
     let last_popup_open = Rc::new(Cell::new(Instant::now() - Duration::from_secs(3)));
+    let startup_preview = Rc::new(Cell::new(false));
+    let dragging = Rc::new(Cell::new(false));
 
     let capsule = CapsuleWindow::new()?;
     let settings = SettingsWindow::new()?;
@@ -340,7 +374,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         let pref = preferences.clone();
         let last_open = last_popup_open.clone();
         let origin = edge_origin.clone();
+        let preview = startup_preview.clone();
         tray.on_tray_clicked(move || {
+            preview.set(false);
             #[cfg(debug_assertions)]
             if std::env::var_os("WACU_QA").is_some() {
                 eprintln!("WACU_QA tray_clicked mode={:?}", pref.borrow().mode);
@@ -358,11 +394,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         let cap = capsule.as_weak();
         let pref = preferences.clone();
         let origin = edge_origin.clone();
+        let preview = startup_preview.clone();
         tray.on_switch_mode({
             let settings = settings.as_weak();
             let model = model.clone();
             move || {
                 if let (Some(c), Some(s)) = (cap.upgrade(), settings.upgrade()) {
+                    preview.set(false);
                     let next = if pref.borrow().mode == Mode::Popup {
                         Mode::Pinned
                     } else {
@@ -375,7 +413,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     {
         let weak = settings.as_weak();
+        let preview = startup_preview.clone();
         tray.on_show_settings(move || {
+            preview.set(false);
             if let Some(s) = weak.upgrade() {
                 show_settings(&s);
             }
@@ -386,7 +426,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     });
     {
         let weak = settings.as_weak();
+        let preview = startup_preview.clone();
         capsule.on_open_settings(move || {
+            preview.set(false);
             if let Some(s) = weak.upgrade() {
                 show_settings(&s);
             }
@@ -394,9 +436,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     {
         let weak = capsule.as_weak();
+        let prefs = preferences.clone();
+        let preview = startup_preview.clone();
+        let active_drag = dragging.clone();
+        let last_open = last_popup_open.clone();
         capsule.on_start_drag(move || {
             if let Some(c) = weak.upgrade() {
+                preview.set(false);
+                active_drag.set(true);
                 platform_windows::begin_drag(c.window());
+                active_drag.set(false);
+                last_open.set(Instant::now());
+                remember_position(&c, &prefs, None);
             }
         });
     }
@@ -404,7 +455,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         let cap = capsule.as_weak();
         let view = detail.as_weak();
         let pref = preferences.clone();
+        let preview = startup_preview.clone();
         capsule.on_open_service(move |idx| {
+            preview.set(false);
             if let (Some(c), Some(d)) = (cap.upgrade(), view.upgrade()) {
                 if let Ok(index) = usize::try_from(idx) {
                     if index < 3 {
@@ -463,7 +516,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         let pref = preferences.clone();
         let model = model.clone();
         let origin = edge_origin.clone();
+        let preview = startup_preview.clone();
         settings.on_set_pinned(move |enabled| {
+            preview.set(false);
             if let (Some(c), Some(s)) = (cap.upgrade(), settings_weak.upgrade()) {
                 set_mode(
                     if enabled { Mode::Pinned } else { Mode::Popup },
@@ -742,13 +797,47 @@ fn main() -> Result<(), Box<dyn Error>> {
     if show_tray {
         tray.show()?;
     }
-    if initial.mode == Mode::Pinned {
-        show_capsule(&capsule, &preferences);
-    }
+    startup_preview.set(initial.mode == Mode::Popup);
+    last_popup_open.set(Instant::now());
+    show_capsule(&capsule, &preferences);
 
     // Debug-only visual QA; does not exist in the Release application.
     #[cfg(debug_assertions)]
     if !qa_view.is_empty() {
+        if std::env::var_os("WACU_QA_STARTUP").is_some() {
+            let weak = capsule.as_weak();
+            Timer::single_shot(Duration::from_millis(300), move || {
+                let c = weak.upgrade().unwrap();
+                assert!(c.window().is_visible() && c.get_revealed());
+                // Keep the test window away from the actual mouse without moving it.
+                let cursor = platform_windows::cursor();
+                let area = platform_windows::work_area_at(cursor);
+                let size = capsule_dimensions(&c);
+                let point = Point {
+                    x: if cursor.x < (area.left + area.right) / 2 {
+                        area.right - size.0 - 20
+                    } else {
+                        area.left + 20
+                    },
+                    y: if cursor.y < (area.top + area.bottom) / 2 {
+                        area.bottom - size.1 - 20
+                    } else {
+                        area.top + 20
+                    },
+                };
+                c.window()
+                    .set_position(PhysicalPosition::new(point.x, point.y));
+                eprintln!("WACU_QA startup_shown");
+            });
+            let weak = capsule.as_weak();
+            let mode = initial.mode;
+            Timer::single_shot(Duration::from_millis(3700), move || {
+                let c = weak.upgrade().unwrap();
+                assert_eq!(c.window().is_visible(), mode == Mode::Pinned);
+                eprintln!("WACU_QA startup_pass mode={mode:?}");
+                let _ = slint::quit_event_loop();
+            });
+        }
         if std::env::var_os("WACU_QA_POSITION").is_some() {
             let cap = capsule.as_weak();
             let settings = settings.as_weak();
@@ -759,6 +848,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let c = cap.upgrade().unwrap();
                 let s = settings.upgrade().unwrap();
                 let t = tray.upgrade().unwrap();
+                let drag_calls = Rc::new(Cell::new(0));
+                let calls = drag_calls.clone();
+                // Check real Logo hit-testing without entering the OS mouse drag loop.
+                c.on_start_drag(move || calls.set(calls.get() + 1));
+                qa_click(c.window(), 44.0, 48.0);
+                assert_eq!(drag_calls.get(), 1);
                 let size = capsule_dimensions(&c);
                 let current = c.window().position();
                 let area = platform_windows::work_area_at(Point {
@@ -783,6 +878,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 s.invoke_set_pinned(false);
                 t.invoke_tray_clicked();
                 expect_position(custom);
+                qa_click(c.window(), 44.0, 48.0);
+                assert_eq!(drag_calls.get(), 2);
                 s.invoke_set_pinned(true);
                 expect_position(custom);
                 // Switching while edge-hidden must retain the visible origin.
@@ -804,7 +901,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 assert_eq!(prefs.borrow().saved_position, Some((left.x, left.y)));
                 assert_eq!(state::load().saved_position, Some((left.x, left.y)));
                 eprintln!(
-                    "WACU_QA position_pass drag, popup, pinned, edge-hidden, dock-left, saved"
+                    "WACU_QA position_pass logo_input_both_modes, drag, popup, pinned, edge-hidden, dock-left, saved"
                 );
             });
         }
@@ -962,7 +1059,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             } else {
                 eprintln!("Wacu preview snapshot unavailable");
             }
-            if std::env::var_os("WACU_QA_EXIT").is_some() {
+            if std::env::var_os("WACU_QA_EXIT").is_some()
+                && std::env::var_os("WACU_QA_STARTUP").is_none()
+            {
                 let _ = slint::quit_event_loop();
             }
         });
@@ -975,14 +1074,21 @@ fn main() -> Result<(), Box<dyn Error>> {
         let details = detail.as_weak();
         let prefs = preferences.clone();
         let popup_open = last_popup_open.clone();
+        let preview = startup_preview.clone();
+        let active_drag = dragging.clone();
         let last_pos = Rc::new(RefCell::new(None::<(i32, i32)>));
         let origin = edge_origin.clone();
         let last_save = Rc::new(Cell::new(Instant::now()));
         let edge_revealed = Rc::new(Cell::new(Instant::now() - Duration::from_secs(1)));
         housekeeping.start(TimerMode::Repeated, Duration::from_millis(200), move || {
             let Some(c) = cap.upgrade() else { return };
+            if active_drag.get() {
+                return;
+            }
             #[cfg(debug_assertions)]
-            if std::env::var_os("WACU_QA_VIEW").is_some() {
+            if std::env::var_os("WACU_QA_VIEW").is_some()
+                && std::env::var_os("WACU_QA_STARTUP").is_none()
+            {
                 return;
             }
             let mut detail_active = false;
@@ -1010,13 +1116,16 @@ fn main() -> Result<(), Box<dyn Error>> {
                 // Windows may temporarily retain focus on the taskbar overflow/menu.
                 // Give a newly opened popup time to receive focus and let pointer hover
                 // prevent accidental dismissal when SetForegroundWindow is denied.
-                if popup_open.get().elapsed() > Duration::from_millis(1500)
-                    && !platform_windows::is_foreground(c.window())
-                    && !platform_windows::cursor_is_over(c.window())
-                    && !detail_active
-                {
-                    c.set_revealed(false);
-                    let _ = c.hide();
+                if should_hide_popup(
+                    popup_open.get().elapsed(),
+                    preview.get(),
+                    platform_windows::is_foreground(c.window()),
+                    platform_windows::cursor_is_over(c.window()),
+                    detail_active,
+                ) {
+                    preview.set(false);
+                    remember_position(&c, &prefs, None);
+                    toggle_capsule(&c, &prefs);
                 }
             } else {
                 if let Some(original) = origin.get() {
@@ -1083,6 +1192,69 @@ fn main() -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn startup_preview_hides_after_three_seconds_even_with_focus() {
+        assert!(!should_hide_popup(
+            Duration::from_millis(2999),
+            true,
+            true,
+            false,
+            false
+        ));
+        assert!(should_hide_popup(
+            Duration::from_secs(3),
+            true,
+            true,
+            false,
+            false
+        ));
+        assert!(!should_hide_popup(
+            Duration::from_secs(4),
+            true,
+            true,
+            true,
+            false
+        ));
+        assert!(!should_hide_popup(
+            Duration::from_secs(4),
+            true,
+            true,
+            false,
+            true
+        ));
+    }
+
+    #[test]
+    fn regular_popup_waits_for_focus_or_hover_to_leave() {
+        assert!(!should_hide_popup(
+            Duration::from_secs(4),
+            false,
+            true,
+            false,
+            false
+        ));
+        assert!(!should_hide_popup(
+            Duration::from_millis(1500),
+            false,
+            false,
+            false,
+            false
+        ));
+        assert!(should_hide_popup(
+            Duration::from_secs(2),
+            false,
+            false,
+            false,
+            false
+        ));
+        assert!(!should_hide_popup(
+            Duration::from_secs(2),
+            false,
+            false,
+            true,
+            false
+        ));
+    }
     #[test]
     fn demo_arc_is_generated() {
         assert!(arc_svg(76).as_str().contains("A 24 24"));

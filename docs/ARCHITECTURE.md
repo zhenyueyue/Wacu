@@ -23,11 +23,12 @@ src/placement.rs            # 可测试的多屏工作区坐标算法
 src/state.rs                # 模式、位置和启用服务的 JSON 持久化
 scripts/capture-ui.ps1      # 隔离配置的原生界面快照检查
 scripts/check-position.ps1  # 隔离配置的两种模式共享位置检查
+scripts/check-startup.ps1   # 弹出／常驻启动显隐检查
 ```
 
 ## 窗口
 
-- **CapsuleWindow**：透明背景、无边框、置顶、圆角胶囊。默认仅托盘，不启动就显示；弹出和常驻共用持久化的桌面位置，切换时即时记录位置，贴边隐藏时记录正常可见位置。
+- **CapsuleWindow**：透明背景、无边框、置顶、圆角胶囊。启动先显示，弹出模式约 3 秒后收起，常驻模式保持显示；两种模式均支持 Logo 拖动并共用持久化的桌面位置，松开和切换时即时记录位置，贴边隐藏时记录正常可见位置。
 - **DetailWindow**：点选某项时弹出，显示多个额度说明及真实接入的预留状态。
 - **SettingsWindow**：常规／服务管理／外观／行为／关于，深色 Fluent 下拉框和滑杆。
 - **WacuTray**：Slint 自带 Windows Shell 系统托盘，保证隐藏窗口时后台事件循环仍存活。
