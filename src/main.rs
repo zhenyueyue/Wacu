@@ -353,22 +353,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         });
     }
     {
-        let cap = capsule.as_weak();
-        let pref = preferences.clone();
-        let settings = settings.as_weak();
-        let model = model.clone();
-        capsule.on_toggle_mode(move || {
-            if let (Some(c), Some(s)) = (cap.upgrade(), settings.upgrade()) {
-                let next = if pref.borrow().mode == Mode::Popup {
-                    Mode::Pinned
-                } else {
-                    Mode::Popup
-                };
-                set_mode(next, &pref, &model, &c, &s);
-            }
-        });
-    }
-    {
         let weak = capsule.as_weak();
         capsule.on_start_drag(move || {
             if let Some(c) = weak.upgrade() {
@@ -578,7 +562,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                     });
                 }
             }
-            "settings" => show_settings(&settings),
+            "settings" => {
+                let page = std::env::var("WACU_QA_PAGE")
+                    .ok()
+                    .and_then(|page| page.parse::<i32>().ok())
+                    .unwrap_or(0)
+                    .clamp(0, 4);
+                settings.set_selected_page(page);
+                show_settings(&settings);
+            }
             _ => {}
         }
     }

@@ -52,6 +52,6 @@ cargo build --release
 
 第三阶段：增量采集、缓存、配额提醒、安装包、自动更新。
 
-详细内容见 [UI 设计落地规范](docs/UI_SPEC.md)、[架构文档](docs/ARCHITECTURE.md) 和 [Windows 验收记录](docs/WINDOWS_QA.md)。
+详细内容见 [UI 设计落地规范与实际截图](docs/UI_SPEC.md)、[架构文档](docs/ARCHITECTURE.md) 和 [Windows 验收记录](docs/WINDOWS_QA.md)。
 
 Wacu 的入口是 Windows 系统托盘，尚非系统天气 Widgets 原生任务栏区域。
