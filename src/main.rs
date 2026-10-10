@@ -4,7 +4,12 @@ mod placement;
 mod platform_windows;
 mod state;
 
-use std::{cell::RefCell, error::Error, rc::Rc, time::Duration};
+use std::{
+    cell::{Cell, RefCell},
+    error::Error,
+    rc::Rc,
+    time::{Duration, Instant},
+};
 
 use placement::{Point, constrain, pinned, popup};
 use slint::{
@@ -82,6 +87,7 @@ fn service(index: usize, visible: bool) -> Service {
         _ => ("积分余额 · 3,324 / 3,609", "积分余额以官方接口为准"),
     };
     Service {
+        source_index: index as i32,
         label: NAMES[index].into(),
         subtitle: SUBTITLES[index].into(),
         symbol: SYMBOLS[index].into(),
@@ -94,17 +100,26 @@ fn service(index: usize, visible: bool) -> Service {
     }
 }
 
+fn visible_service_indices(shown: &[bool; 3]) -> impl Iterator<Item = usize> + '_ {
+    shown
+        .iter()
+        .enumerate()
+        .filter_map(|(index, visible)| visible.then_some(index))
+}
+
 fn refresh_model(
     model: &Rc<VecModel<Service>>,
     capsule: &CapsuleWindow,
     settings: &SettingsWindow,
     prefs: &Preferences,
 ) {
-    for i in 0..3 {
-        model.set_row_data(i, service(i, prefs.shown[i]));
+    while model.row_count() > 0 {
+        model.remove(model.row_count() - 1);
     }
-    let count = prefs.shown.iter().filter(|v| **v).count().max(1);
-    capsule.set_visible_count(count as i32);
+    for i in visible_service_indices(&prefs.shown) {
+        model.push(service(i, true));
+    }
+    capsule.set_visible_count(model.row_count() as i32);
     settings.set_show_codex(prefs.shown[0]);
     settings.set_show_claude(prefs.shown[1]);
     settings.set_show_workbuddy(prefs.shown[2]);
@@ -201,6 +216,16 @@ fn set_mode(
     }
 }
 
+fn show_settings(settings: &SettingsWindow) {
+    let _ = settings.show();
+    let weak = settings.as_weak();
+    Timer::single_shot(Duration::from_millis(30), move || {
+        if let Some(settings) = weak.upgrade() {
+            platform_windows::use_dark_title_bar(settings.window());
+        }
+    });
+}
+
 fn show_detail(detail: &DetailWindow, capsule: &CapsuleWindow, index: usize, prefs: &Preferences) {
     if !prefs.shown[index] {
         return;
@@ -240,6 +265,7 @@ fn show_detail(detail: &DetailWindow, capsule: &CapsuleWindow, index: usize, pre
 fn main() -> Result<(), Box<dyn Error>> {
     let initial = state::load();
     let preferences = Rc::new(RefCell::new(initial.clone()));
+    let last_popup_open = Rc::new(Cell::new(Instant::now() - Duration::from_secs(3)));
 
     let capsule = CapsuleWindow::new()?;
     let settings = SettingsWindow::new()?;
@@ -248,8 +274,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     tray.set_tray_icon(make_tray_icon());
 
     let model = Rc::new(VecModel::from(
-        (0..3)
-            .map(|i| service(i, initial.shown[i]))
+        visible_service_indices(&initial.shown)
+            .map(|i| service(i, true))
             .collect::<Vec<_>>(),
     ));
     capsule.set_services(ModelRc::from(model.clone()));
@@ -258,12 +284,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     {
         let cap = capsule.as_weak();
         let pref = preferences.clone();
+        let last_open = last_popup_open.clone();
         tray.on_tray_clicked(move || {
             #[cfg(debug_assertions)]
             if std::env::var_os("WACU_QA").is_some() {
                 eprintln!("WACU_QA tray_clicked mode={:?}", pref.borrow().mode);
             }
             if let Some(c) = cap.upgrade() {
+                if !c.window().is_visible() {
+                    last_open.set(Instant::now());
+                }
                 toggle_capsule(&c, &pref.borrow());
             }
         });
@@ -290,7 +320,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let weak = settings.as_weak();
         tray.on_show_settings(move || {
             if let Some(s) = weak.upgrade() {
-                let _ = s.show();
+                show_settings(&s);
             }
         });
     }
@@ -301,7 +331,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let weak = settings.as_weak();
         capsule.on_open_settings(move || {
             if let Some(s) = weak.upgrade() {
-                let _ = s.show();
+                show_settings(&s);
             }
         });
     }
@@ -451,6 +481,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let cap = capsule.as_weak();
         let details = detail.as_weak();
         let prefs = preferences.clone();
+        let popup_open = last_popup_open.clone();
         let last_pos = Rc::new(RefCell::new(None::<(i32, i32)>));
         housekeeping.start(TimerMode::Repeated, Duration::from_millis(950), move || {
             let Some(c) = cap.upgrade() else { return };
@@ -466,8 +497,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                 return;
             }
             if prefs.borrow().mode == Mode::Popup {
-                if !platform_windows::is_foreground(c.window()) {
-                    // Allow a brief activation grace period after tray click.
+                // Windows may temporarily retain focus on the taskbar overflow/menu.
+                // Give a newly opened popup time to receive focus and let pointer hover
+                // prevent accidental dismissal when SetForegroundWindow is denied.
+                if popup_open.get().elapsed() > Duration::from_millis(1500)
+                    && !platform_windows::is_foreground(c.window())
+                    && !platform_windows::cursor_is_over(c.window())
+                {
                     c.set_revealed(false);
                     let _ = c.hide();
                 }
@@ -496,5 +532,19 @@ mod tests {
     fn demo_arc_is_generated() {
         assert!(arc_svg(76).as_str().contains("A 24 24"));
         assert!(arc_svg(0).as_str().contains("M 56 56"));
+    }
+
+    #[test]
+    fn filtered_services_keep_their_original_ids() {
+        assert_eq!(
+            visible_service_indices(&[false, true, true]).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert_eq!(
+            visible_service_indices(&[true, false, true]).collect::<Vec<_>>(),
+            vec![0, 2]
+        );
+        assert_eq!(visible_service_indices(&[false, false, false]).count(), 0);
+        assert_eq!(service(2, true).source_index, 2);
     }
 }

@@ -1,13 +1,15 @@
 //! Small Windows-specific window integration. Rendering and tray are handled by Slint.
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use windows_sys::Win32::{
-    Foundation::{HWND, POINT},
+    Foundation::{HWND, POINT, RECT},
+    Graphics::Dwm::DwmSetWindowAttribute,
     Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint},
     UI::Input::KeyboardAndMouse::ReleaseCapture,
     UI::WindowsAndMessaging::{
-        GWL_EXSTYLE, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW, HTCAPTION,
-        SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetForegroundWindow,
-        SetWindowLongPtrW, SetWindowPos, WM_NCLBUTTONDOWN, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+        GWL_EXSTYLE, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect,
+        HTCAPTION, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW,
+        SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, WM_NCLBUTTONDOWN, WS_EX_APPWINDOW,
+        WS_EX_TOOLWINDOW,
     },
 };
 
@@ -77,6 +79,35 @@ pub fn is_foreground(window: &slint::Window) -> bool {
         return false;
     };
     unsafe { GetForegroundWindow() == hwnd }
+}
+
+pub fn cursor_is_over(window: &slint::Window) -> bool {
+    let Some(hwnd) = native_window(window) else {
+        return false;
+    };
+    let mut rect: RECT = unsafe { std::mem::zeroed() };
+    if unsafe { GetWindowRect(hwnd, &mut rect) } == 0 {
+        return false;
+    }
+    let point = cursor();
+    point.x >= rect.left && point.x < rect.right && point.y >= rect.top && point.y < rect.bottom
+}
+
+pub fn use_dark_title_bar(window: &slint::Window) {
+    let Some(hwnd) = native_window(window) else {
+        return;
+    };
+    // DWMWA_USE_IMMERSIVE_DARK_MODE (Windows 10 20H1 and Windows 11).
+    // Older Windows versions can ignore this optional appearance preference.
+    let enabled: i32 = 1;
+    unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            20,
+            (&enabled as *const i32).cast(),
+            std::mem::size_of_val(&enabled) as u32,
+        );
+    }
 }
 
 pub fn configure_capsule(window: &slint::Window) {

@@ -1,6 +1,7 @@
 import { Button, CheckBox, Switch, ScrollView } from "std-widgets.slint";
 
 export struct Service {
+    source-index: int,
     label: string,
     subtitle: string,
     symbol: string,
@@ -99,7 +100,7 @@ export component CapsuleWindow inherits Window {
     width: 106px;
     in property <int> visible-count: 3;
     in-out property <bool> revealed: false;
-    height: 112px + 102px * visible-count;
+    height: 142px + 102px * (visible-count == 0 ? 1 : visible-count);
     background: transparent;
     no-frame: true;
     always-on-top: true;
@@ -129,7 +130,7 @@ export component CapsuleWindow inherits Window {
 
         VerticalLayout {
             padding-top: 13px;
-            padding-bottom: 10px;
+            padding-bottom: 40px;
             padding-left: 4px;
             padding-right: 4px;
             spacing: 4px;
@@ -176,10 +177,18 @@ export component CapsuleWindow inherits Window {
             }
             Rectangle { width: 35px; height: 1px; background: #35383e; horizontal-stretch: 0; }
 
-            for service[idx] in root.services: QuotaItem {
-                visible: service.visible;
+            if root.visible-count == 0: Text {
+                height: 85px;
+                text: "尚未启用\n监控服务";
+                color: #929a9b;
+                font-size: 11px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            for service in root.services: QuotaItem {
                 service: service;
-                selected => { root.open-service(idx); }
+                selected => { root.open-service(service.source-index); }
             }
 
             Rectangle { width: 35px; height: 1px; background: #35383e; horizontal-stretch: 0; }
@@ -213,7 +222,7 @@ component QuotaBar inherits Rectangle {
         y: 26px; width: parent.width; height: 7px; border-radius: 4px; background: #303740;
         Rectangle {
             height: parent.height;
-            width: parent.width * (root.value / 100);
+            width: parent.width * (root.value / 100.0);
             background: root.accent;
             border-radius: 4px;
             animate width { duration: 550ms; easing: ease-out; }
@@ -223,7 +232,7 @@ component QuotaBar inherits Rectangle {
 }
 
 export component DetailWindow inherits Window {
-    width: 342px; height: 464px;
+    width: 342px; height: 504px;
     no-frame: true; always-on-top: true; background: transparent;
     title: "Wacu · 额度详情";
     in property <Service> selected-service;
@@ -298,13 +307,15 @@ component SettingToggle inherits Rectangle {
     background: #21262d;
     border-radius: 14px;
     HorizontalLayout {
+        width: parent.width;
+        height: parent.height;
         padding-left: 15px; padding-right: 15px; alignment: center; spacing: 6px;
         VerticalLayout {
+            horizontal-stretch: 1;
             spacing: 4px; alignment: center;
             Text { text: root.label; font-size: 13px; color: #f0f2f4; }
             Text { text: root.subtitle; font-size: 11px; color: #919ca6; }
         }
-        Rectangle { horizontal-stretch: 1; }
         Rectangle {
             width: 38px; height: 22px; border-radius: 12px;
             background: root.enabled ? #8bd2b6 : #535963;
