@@ -6,7 +6,7 @@
 
 | 设计要求 | 程序实现 |
 | --- | --- |
-| 黑色窄胶囊、圆形角色、百分比、底部齿轮 | 48px 主体、36px 进度环、20px 双眼角色、12px 数字、32px 设置触点 |
+| 黑色窄胶囊、圆形角色、百分比、底部齿轮 | 默认 64px 主体、50px 进度环、28px 双眼角色、14px 数字、40px 设置触点；三档大小可选 |
 | 点击后在侧面展开，不覆盖胶囊 | 优先右侧，空间不足时左侧；保持屏幕工作区内；蓝色箭头指向面板 |
 | 快览：大百分比、进度条、三行信息、详情按钮 | 已用百分比与次数、今日用量、剩余额度、重置时间 |
 | 完整详情：时间筛选、柱状图、官网入口 | 今日／7天／30天／全部，24 根演示柱、网格和五个刻度；打开默认浏览器 |
@@ -19,20 +19,22 @@
 
 ## 尺寸和配色
 
-以下均为逻辑像素。原生窗口在主体外留出 12px，容纳透明阴影；这部分不计入设计主体尺寸。
+以下均为逻辑像素。胶囊在主体外留出 12px，详情和设置留出 15px，容纳透明阴影；这部分不计入设计主体尺寸。详情、设置及共用控件由统一 1.25 倍 Token 放大，字体和坐标同步变化。
 
 | 组件 | 尺寸 |
 | --- | --- |
-| 胶囊主体 | 宽 48px；高 64 + 52 × max(1, 服务数)，默认三项 220px |
-| 胶囊原生窗口 | 宽 72px；默认高 244px，0／1／2／3 项对应 140／140／192／244px |
-| 服务项 | 40 × 52px；圆环 36px；中心角色 20px |
-| 底部设置触点 | 32 × 32px |
-| 快览原生窗口 | 296 × 400px；深色主体 272 × 376px |
-| 完整详情原生窗口 | 296 × 584px；深色主体 272 × 560px |
-| 设置原生窗口 | 424 × 560px；主体 400 × 536px；左导航 116px |
-| 信息行 | 32px 高；图标、标签、数值分别固定在 x=0／26／90 |
-| 开关 | 36 × 20px，白色滑块 16px；设置项高 58px |
-| 圆角 | 胶囊 24px、面板 12px、控件 8px |
+| 胶囊主体 | 紧凑／标准／宽松宽度 48／64／80px；默认三项主体 64 × 282px |
+| 胶囊原生窗口 | 默认 88 × 306px；0／1／2／3 项对应 166／166／236／306px；紧凑三项 72 × 244px，宽松三项 104 × 356px |
+| 服务项 | 标准 56 × 70px；圆环 50px；中心角色 28px；数字 14px |
+| 底部设置触点 | 紧凑／标准／宽松为 32／40／48px |
+| 快览原生窗口 | 370 × 500px；深色主体 340 × 470px |
+| 完整详情原生窗口 | 370 × 730px；深色主体 340 × 700px |
+| 设置原生窗口 | 530 × 700px；主体 500 × 670px；左导航 145px |
+| 信息行 | 40px 高；图标、标签、数值分别固定在 x=0／32.5／112.5 |
+| 开关 | 45 × 25px，白色滑块 20px；设置项高 72.5px |
+| 圆角 | 胶囊随宽度变化、面板 15px、控件 10px |
+
+外观页的胶囊尺寸选择立即生效，并保存至用户配置。旧配置缺少 capsule_size 时采用标准档；调整后等待原生窗口重新布局，再约束到屏幕工作区并同步重定位已打开的详情。
 
 | Token | 色值 |
 | --- | --- |
@@ -64,7 +66,7 @@
 
 [界面总览](screenshots/overview.png) 将未改动的原生快照排列在一起，便于与设计图比较。
 
-- [胶囊](screenshots/capsule.png)、[选中状态](screenshots/capsule-selected.png)、[全服务关闭](screenshots/capsule-empty.png)
+- [标准胶囊](screenshots/capsule.png)、[紧凑胶囊](screenshots/capsule-compact.png)、[宽松胶囊](screenshots/capsule-spacious.png)、[选中状态](screenshots/capsule-selected.png)、[全服务关闭](screenshots/capsule-empty.png)
 - [用量快览](screenshots/quick-detail.png)、[完整详情](screenshots/full-detail.png)
 - [常规设置](screenshots/settings-general.png)、[服务管理](screenshots/settings-services.png)、[外观](screenshots/settings-appearance.png)、[行为](screenshots/settings-behavior.png)、[关于](screenshots/settings-about.png)
 - [7 天](screenshots/detail-week.png)、[30 天](screenshots/detail-month.png)、[全部](screenshots/detail-all.png)
@@ -75,7 +77,7 @@
 
 ```powershell
 cargo build
-.\scripts\capture-ui.ps1             # 在 target 中生成 15 张快照
+.\scripts\capture-ui.ps1             # 在 target 中生成 17 张快照
 .\scripts\capture-ui.ps1 -Archive    # 将同一批快照更新到 docs/screenshots
 python scripts\ui-overview.py        # 生成总览，需要 Pillow
 ```
@@ -88,6 +90,7 @@ python scripts\ui-overview.py        # 生成总览，需要 Pillow
 $env:WACU_QA_VIEW = "detail"   # capsule / quick / detail / settings
 $env:WACU_QA_PAGE = "0"        # 设置分类 0–4
 $env:WACU_QA_COUNT = "3"       # 胶囊服务数 0–3
+$env:WACU_QA_SIZE = "1"        # 胶囊大小 0–2
 $env:WACU_QA_PERIOD = "0"      # 详情时间筛选 0–3
 cargo run
 ```

@@ -115,6 +115,8 @@ fn refresh_model(
         model.push(service(i, true));
     }
     capsule.set_visible_count(model.row_count() as i32);
+    capsule.set_size_mode(prefs.capsule_size.min(2) as i32);
+    settings.set_capsule_size(prefs.capsule_size.min(2) as i32);
     settings.set_show_codex(prefs.shown[0]);
     settings.set_show_claude(prefs.shown[1]);
     settings.set_show_workbuddy(prefs.shown[2]);
@@ -285,6 +287,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             mode: Mode::Pinned,
             ..Preferences::default()
         };
+        initial.capsule_size = std::env::var("WACU_QA_SIZE")
+            .ok()
+            .and_then(|value| value.parse::<u8>().ok())
+            .unwrap_or(1)
+            .min(2);
         let count = std::env::var("WACU_QA_COUNT")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
@@ -537,6 +544,51 @@ fn main() -> Result<(), Box<dyn Error>> {
             if let Some(s) = settings_weak.upgrade() {
                 s.set_opacity_percent(percent as f32);
             }
+        });
+    }
+    {
+        let prefs = preferences.clone();
+        let capsule_weak = capsule.as_weak();
+        let settings_weak = settings.as_weak();
+        let detail_weak = detail.as_weak();
+        let origin = edge_origin.clone();
+        settings.on_set_capsule_size(move |size| {
+            let size = size.clamp(0, 2) as u8;
+            let mut value = prefs.borrow_mut();
+            if value.capsule_size == size {
+                return;
+            }
+            value.capsule_size = size;
+            origin.set(None);
+            if let Some(c) = capsule_weak.upgrade() {
+                c.set_size_mode(size as i32);
+            }
+            if let Some(s) = settings_weak.upgrade() {
+                s.set_capsule_size(size as i32);
+                s.set_status_message(match state::save(&value) {
+                    Ok(()) => "".into(),
+                    Err(error) => error.into(),
+                });
+            } else if let Err(error) = state::save(&value) {
+                eprintln!("Saving capsule size: {error}");
+            }
+            drop(value);
+            let weak = capsule_weak.clone();
+            let details = detail_weak.clone();
+            let prefs = prefs.clone();
+            Timer::single_shot(Duration::from_millis(40), move || {
+                if let Some(c) = weak.upgrade() {
+                    if c.window().is_visible() {
+                        let preferences = prefs.borrow();
+                        place_capsule(&c, &preferences, None);
+                        if let Some(d) = details.upgrade() {
+                            if d.window().is_visible() {
+                                position_detail(&d, &c);
+                            }
+                        }
+                    }
+                }
+            });
         });
     }
     {

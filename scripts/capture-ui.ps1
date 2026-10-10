@@ -7,6 +7,8 @@ $configPath = Join-Path $env:APPDATA 'Wacu\preferences.json'
 $configBefore = if (Test-Path -LiteralPath $configPath) { (Get-FileHash -LiteralPath $configPath).Hash } else { $null }
 $cases = @(
     @{ View = 'capsule'; Name = 'capsule'; Count = 3 },
+    @{ View = 'capsule'; Name = 'capsule-compact'; Count = 3; Size = 0 },
+    @{ View = 'capsule'; Name = 'capsule-spacious'; Count = 3; Size = 2 },
     @{ View = 'capsule'; Name = 'capsule-selected'; Count = 3; Selected = 1 },
     @{ View = 'capsule'; Name = 'capsule-empty'; Count = 0 },
     @{ View = 'capsule'; Name = 'capsule-one'; Count = 1 },
@@ -34,6 +36,7 @@ foreach ($case in $cases) {
     $start.Environment['WACU_QA_PAGE'] = [string]$case.Page
     $start.Environment['WACU_QA_PERIOD'] = [string]$case.Period
     $start.Environment['WACU_QA_SELECTED'] = [string]$case.Selected
+    $start.Environment['WACU_QA_SIZE'] = [string]$case.Size
     $start.Environment['WACU_QA_EXIT'] = '1'
     $process = [System.Diagnostics.Process]::Start($start)
     if (!$process.WaitForExit(15000)) {
