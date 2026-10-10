@@ -89,11 +89,11 @@ component QuotaItem inherits Rectangle {
         }
     }
     Text {
-        x: 0px; y: root.size-mode == 0 ? 37px : (root.size-mode == 1 ? 52px : 64px);
+        x: 0px; y: root.size-mode == 0 ? 33px : (root.size-mode == 1 ? 45px : 57px);
         width: parent.width; height: root.size-mode == 0 ? 15px : 19px;
         text: root.service.percent + "%";
         font-size: root.size-mode == 0 ? 12px : (root.size-mode == 1 ? 14px : 16px);
-        font-weight: 600; color: Tokens.text;
+        font-family: "Bahnschrift"; font-weight: 500; color: Tokens.text;
         horizontal-alignment: center; vertical-alignment: center;
     }
     if root.selected: Path {
