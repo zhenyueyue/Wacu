@@ -12,3 +12,11 @@ for name, logical_size in [("compact", 32), ("standard", 40), ("spacious", 48)]:
     size = logical_size * 2
     icon = source.resize((size, size), Image.Resampling.LANCZOS)
     icon.save(root / "assets" / f"logo-{name}.png", optimize=True)
+
+app_icon = source.resize((256, 256), Image.Resampling.LANCZOS)
+app_icon.save(root / "assets" / "app-icon.png", optimize=True)
+app_icon.save(
+    root / "assets" / "app.ico",
+    format="ICO",
+    sizes=[(size, size) for size in (16, 20, 24, 32, 40, 48, 64, 96, 128, 256)],
+)

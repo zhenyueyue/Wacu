@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod glow;
 mod placement;
 mod platform_windows;
 mod state;
@@ -23,45 +24,6 @@ const NAMES: [&str; 3] = ["Codex", "Claude Code", "WorkBuddy"];
 const SUBTITLES: [&str; 3] = ["OpenAI · ChatGPT", "Anthropic · Claude", "Credits · 积分"];
 // Used percentages (never remaining percentages). Explicitly marked demo in the UI.
 const VALUES: [i32; 3] = [13, 24, 2];
-
-fn make_tray_icon() -> slint::Image {
-    // A small antialiased icon is rasterized just once; no WebView or OS image file is needed.
-    let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(64, 64);
-    let pixels = buffer.make_mut_bytes();
-    for y in 0..64 {
-        for x in 0..64 {
-            let dx = x as f64 + 0.5 - 32.0;
-            let dy = y as f64 + 0.5 - 32.0;
-            let distance = dx.hypot(dy);
-            let angle = dy.atan2(dx).to_degrees();
-            let ring = (distance - 25.0).abs() < 3.1;
-            let active = (angle + 90.0 + 360.0) % 360.0 < 275.0;
-            let face = (dx / 13.5).powi(2) + (dy / 11.0).powi(2) < 1.0;
-            let eye = dy > -5.0 && dy < 6.0 && ((dx > -7.0 && dx < -4.0) || (dx > 4.0 && dx < 7.0));
-            let (r, g, b, a) = if distance < 30.0 {
-                if eye {
-                    (43, 50, 47, 255)
-                } else if face {
-                    (244, 236, 221, 255)
-                } else if ring && active {
-                    (142, 220, 183, 255)
-                } else if ring {
-                    (71, 84, 79, 255)
-                } else {
-                    (26, 29, 33, 255)
-                }
-            } else {
-                (0, 0, 0, 0)
-            };
-            let i = (y * 64 + x) * 4;
-            pixels[i] = r;
-            pixels[i + 1] = g;
-            pixels[i + 2] = b;
-            pixels[i + 3] = a;
-        }
-    }
-    slint::Image::from_rgba8(buffer)
-}
 
 fn arc_svg(percent: i32) -> SharedString {
     if percent <= 0 {
@@ -93,6 +55,7 @@ fn service(index: usize, visible: bool) -> Service {
         reset: "2026/10/10 00:00".into(),
         accent: tint,
         arc: arc_svg(VALUES[index]),
+        glow: glow::make(VALUES[index], tint),
         visible,
     }
 }
@@ -325,7 +288,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let settings = SettingsWindow::new()?;
     let detail = DetailWindow::new()?;
     let tray = WacuTray::new()?;
-    tray.set_tray_icon(make_tray_icon());
 
     let model = Rc::new(VecModel::from(
         visible_service_indices(&initial.shown)

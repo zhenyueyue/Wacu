@@ -16,7 +16,7 @@ global Tokens {
 export struct Service {
     source-index: int, label: string, subtitle: string,
     percent: int, used: string, total: string, remaining: string, reset: string,
-    accent: color, arc: string, visible: bool,
+    accent: color, arc: string, glow: image, visible: bool,
 }
 
 component Glyph inherits Image {
@@ -59,22 +59,12 @@ component QuotaItem inherits Rectangle {
         height: self.width; border-radius: self.width / 2;
         background: transparent;
         animate width, height, y { duration: root.animated ? 100ms : 0ms; easing: ease-out; }
-        // Concentric translucent strokes soften the halo without raster assets.
-        for spread in [14, 12, 10, 8, 6, 4, 2]: Rectangle {
-            property <length> glow-spread: root.ring-width * spread / 4;
-            width: parent.width; height: parent.height;
-            Path {
-                x: 2px - parent.glow-spread / 2; y: 2px - parent.glow-spread / 2;
-                width: parent.width - 4px + parent.glow-spread; height: parent.height - 4px + parent.glow-spread;
-                commands: root.ring-path; stroke: root.service.accent.with-alpha(0.025);
-                stroke-width: root.ring-width + parent.glow-spread; fill: transparent;
-            }
-            Path {
-                x: 2px - parent.glow-spread / 2; y: 2px - parent.glow-spread / 2;
-                width: parent.width - 4px + parent.glow-spread; height: parent.height - 4px + parent.glow-spread;
-                commands: root.service.arc; stroke: root.service.accent.with-alpha(root.selected ? 0.06 : 0.045);
-                stroke-width: root.ring-width + parent.glow-spread; fill: transparent;
-            }
+        Image {
+            width: parent.width * 66 / 50; height: self.width;
+            x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+            source: root.service.glow; image-fit: contain; image-rendering: smooth;
+            opacity: root.selected ? 1 : 0.85;
+            animate opacity { duration: root.animated ? 150ms : 0ms; easing: ease-out; }
         }
         Path {
             x: 2px; y: 2px; width: parent.width - 4px; height: parent.height - 4px;
@@ -132,7 +122,7 @@ export component CapsuleWindow inherits Window {
     property <length> area-gap: root.size-mode == 0 ? 12px : (root.size-mode == 1 ? 16px : 20px);
     height: 56px + root.logo-size + root.area-gap * 2 + root.settings-height + root.item-height * max(1, visible-count);
     background: transparent; no-frame: true; always-on-top: true; default-font-family: "Segoe UI";
-    icon: @image-url("../assets/tray.svg");
+    icon: @image-url("../assets/app-icon.png");
     in property <[Service]> services;
     in property <int> visible-count: 3;
     in-out property <int> selected-index: -1;
@@ -235,6 +225,7 @@ component ActionRow inherits Rectangle {
 }
 
 export component DetailWindow inherits Window {
+    icon: @image-url("../assets/app-icon.png");
     title: "Wacu · 用量详情"; width: (296px * Tokens.panel-scale); height: expanded ? (612px * Tokens.panel-scale) : (422px * Tokens.panel-scale);
     no-frame: true; always-on-top: true; background: transparent; default-font-family: "Segoe UI";
     default-font-size: 16px;
@@ -426,6 +417,7 @@ component PositionRow inherits Rectangle {
 }
 
 export component SettingsWindow inherits Window {
+    icon: @image-url("../assets/app-icon.png");
     title: "Wacu · 设置"; width: 460px; height: 600px;
     background: transparent; no-frame: true; default-font-family: "Segoe UI";
     default-font-size: 16px;
@@ -607,7 +599,7 @@ export component SettingsWindow inherits Window {
 }
 
 export component WacuTray inherits SystemTrayIcon {
-    in property <image> tray-icon;
+    in property <image> tray-icon: @image-url("../assets/app-icon.png");
     icon: root.tray-icon; tooltip: "Wacu · AI 用量守望";
     callback tray-clicked();
     clicked => { root.tray-clicked(); }
