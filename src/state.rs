@@ -16,6 +16,8 @@ pub struct Preferences {
     pub shown: [bool; 3],
     pub animations_enabled: bool,
     pub opacity_percent: u8,
+    pub edge_hide: bool,
+    pub dock_left: bool,
 }
 
 impl Default for Preferences {
@@ -26,6 +28,8 @@ impl Default for Preferences {
             shown: [true; 3],
             animations_enabled: true,
             opacity_percent: 95,
+            edge_hide: false,
+            dock_left: false,
         }
     }
 }
@@ -66,6 +70,8 @@ mod tests {
         assert_eq!(prefs.shown, [true; 3]);
         assert!(prefs.animations_enabled);
         assert_eq!(prefs.opacity_percent, 95);
+        assert!(!prefs.edge_hide);
+        assert!(!prefs.dock_left);
     }
 
     #[test]
@@ -73,10 +79,14 @@ mod tests {
         let mut prefs = Preferences::default();
         prefs.animations_enabled = false;
         prefs.opacity_percent = 72;
+        prefs.edge_hide = true;
+        prefs.dock_left = true;
         let json = serde_json::to_string(&prefs).unwrap();
         let restored: Preferences = serde_json::from_str(&json).unwrap();
         assert!(!restored.animations_enabled);
         assert_eq!(restored.opacity_percent, 72);
+        assert!(restored.edge_hide);
+        assert!(restored.dock_left);
         assert_eq!(restored.mode, Mode::Popup);
     }
 }

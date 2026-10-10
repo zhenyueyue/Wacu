@@ -11,7 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use placement::{Point, constrain, pinned, popup};
+use placement::{Point, constrain, docked, edge_position, popup};
 use slint::{
     ComponentHandle, Model, ModelRc, PhysicalPosition, SharedString, Timer, TimerMode, VecModel,
 };
@@ -20,9 +20,9 @@ use state::{Mode, Preferences};
 slint::include_modules!();
 
 const NAMES: [&str; 3] = ["Codex", "Claude Code", "WorkBuddy"];
-const SYMBOLS: [&str; 3] = ["◎", "✳", "w"];
 const SUBTITLES: [&str; 3] = ["OpenAI · ChatGPT", "Anthropic · Claude", "Credits · 积分"];
-const VALUES: [i32; 3] = [76, 43, 92];
+// Used percentages (never remaining percentages). Explicitly marked demo in the UI.
+const VALUES: [i32; 3] = [13, 24, 2];
 
 fn make_tray_icon() -> slint::Image {
     // A small antialiased icon is rasterized just once; no WebView or OS image file is needed.
@@ -77,23 +77,20 @@ fn arc_svg(percent: i32) -> SharedString {
 
 fn service(index: usize, visible: bool) -> Service {
     let tint = match index {
-        0 => slint::Color::from_rgb_u8(142, 216, 182),
-        1 => slint::Color::from_rgb_u8(230, 159, 129),
-        _ => slint::Color::from_rgb_u8(164, 154, 238),
+        0 => slint::Color::from_rgb_u8(34, 197, 94),
+        1 => slint::Color::from_rgb_u8(255, 138, 76),
+        _ => slint::Color::from_rgb_u8(139, 92, 246),
     };
-    let (remaining, reset) = match index {
-        0 => ("5 小时额度", "预计重置：1 小时 42 分后"),
-        1 => ("当前会话额度", "预计重置：3 小时 18 分后"),
-        _ => ("积分余额 · 3,324 / 3,609", "积分余额以官方接口为准"),
-    };
+    let used = VALUES[index] * 10;
     Service {
         source_index: index as i32,
         label: NAMES[index].into(),
         subtitle: SUBTITLES[index].into(),
-        symbol: SYMBOLS[index].into(),
         percent: VALUES[index],
-        remaining: remaining.into(),
-        reset: reset.into(),
+        used: used.to_string().into(),
+        total: "1,000".into(),
+        remaining: (1000 - used).to_string().into(),
+        reset: "2026/10/10 00:00".into(),
         accent: tint,
         arc: arc_svg(VALUES[index]),
         visible,
@@ -101,10 +98,8 @@ fn service(index: usize, visible: bool) -> Service {
 }
 
 fn visible_service_indices(shown: &[bool; 3]) -> impl Iterator<Item = usize> + '_ {
-    shown
-        .iter()
-        .enumerate()
-        .filter_map(|(index, visible)| visible.then_some(index))
+    // Match the reference's Claude / OpenAI / purple order, keeping stable IDs.
+    [1, 0, 2].into_iter().filter(|&index| shown[index])
 }
 
 fn refresh_model(
@@ -129,6 +124,8 @@ fn refresh_model(
     capsule.set_surface_opacity(prefs.opacity_percent.clamp(65, 100) as f32 / 100.0);
     settings.set_animations_on(prefs.animations_enabled);
     settings.set_opacity_percent(prefs.opacity_percent.clamp(65, 100) as f32);
+    settings.set_edge_hide_on(prefs.edge_hide);
+    settings.set_dock_side(if prefs.dock_left { 1 } else { 0 });
 }
 
 fn capsule_dimensions(capsule: &CapsuleWindow) -> (i32, i32) {
@@ -152,9 +149,10 @@ fn place_capsule(capsule: &CapsuleWindow, prefs: &Preferences, anchor: Option<Po
                 });
                 constrain(position, size, area)
             } else {
-                pinned(
+                docked(
                     size,
                     platform_windows::work_area_at(platform_windows::cursor()),
+                    prefs.dock_left,
                 )
             }
         }
@@ -221,6 +219,7 @@ fn set_mode(
 }
 
 fn show_settings(settings: &SettingsWindow) {
+    settings.set_startup_on(platform_windows::startup_enabled());
     let _ = settings.show();
     platform_windows::activate(settings.window());
 }
@@ -233,12 +232,14 @@ fn position_detail(detail: &DetailWindow, capsule: &CapsuleWindow) {
         x: cp.x + cs.width as i32 / 2,
         y: cp.y,
     });
-    let left = cp.x - ds.width as i32 - 13;
-    let x = if left >= area.left {
-        left
+    let margin = (8.0 * capsule.window().scale_factor()).round() as i32;
+    let right = cp.x + cs.width as i32 - margin;
+    let x = if right + ds.width as i32 <= area.right {
+        right
     } else {
-        cp.x + cs.width as i32 + 13
+        cp.x - ds.width as i32 + margin
     };
+    capsule.set_panel_on_left(x < cp.x);
     let dest = constrain(
         Point { x, y: cp.y },
         (ds.width as i32, ds.height as i32),
@@ -254,6 +255,8 @@ fn show_detail(detail: &DetailWindow, capsule: &CapsuleWindow, index: usize, pre
         return;
     }
     detail.set_selected_service(service(index, true));
+    detail.set_animated(prefs.animations_enabled);
+    capsule.set_selected_index(index as i32);
     detail.set_expanded(false);
     detail.set_selected_period(0);
     let _ = detail.show();
@@ -278,10 +281,22 @@ fn main() -> Result<(), Box<dyn Error>> {
         qa_view.as_str(),
         "capsule" | "quick" | "detail" | "settings"
     ) {
-        initial.mode = Mode::Pinned;
-        initial.shown = [true; 3];
+        initial = Preferences {
+            mode: Mode::Pinned,
+            ..Preferences::default()
+        };
+        let count = std::env::var("WACU_QA_COUNT")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(3)
+            .min(3);
+        initial.shown = [false; 3];
+        for &index in [1, 0, 2].iter().take(count) {
+            initial.shown[index] = true;
+        }
     }
     let preferences = Rc::new(RefCell::new(initial.clone()));
+    let edge_origin = Rc::new(Cell::new(None::<Point>));
     let last_popup_open = Rc::new(Cell::new(Instant::now() - Duration::from_secs(3)));
 
     let capsule = CapsuleWindow::new()?;
@@ -302,12 +317,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         let cap = capsule.as_weak();
         let pref = preferences.clone();
         let last_open = last_popup_open.clone();
+        let origin = edge_origin.clone();
         tray.on_tray_clicked(move || {
             #[cfg(debug_assertions)]
             if std::env::var_os("WACU_QA").is_some() {
                 eprintln!("WACU_QA tray_clicked mode={:?}", pref.borrow().mode);
             }
             if let Some(c) = cap.upgrade() {
+                origin.set(None);
                 if !c.window().is_visible() {
                     last_open.set(Instant::now());
                 }
@@ -318,11 +335,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     {
         let cap = capsule.as_weak();
         let pref = preferences.clone();
+        let origin = edge_origin.clone();
         tray.on_switch_mode({
             let settings = settings.as_weak();
             let model = model.clone();
             move || {
                 if let (Some(c), Some(s)) = (cap.upgrade(), settings.upgrade()) {
+                    origin.set(None);
                     let next = if pref.borrow().mode == Mode::Popup {
                         Mode::Pinned
                     } else {
@@ -376,15 +395,31 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     {
         let weak = detail.as_weak();
+        let cap = capsule.as_weak();
         detail.on_close_detail(move || {
             if let Some(d) = weak.upgrade() {
                 let _ = d.hide();
             }
+            if let Some(c) = cap.upgrade() {
+                c.set_selected_index(-1);
+            }
         });
     }
-    detail.on_refresh(|| {
-        // The UI is deliberately in demo mode. No network requests or credentials.
-    });
+    {
+        let weak = detail.as_weak();
+        detail.on_open_dashboard(move || {
+            if let Some(d) = weak.upgrade() {
+                let url = match d.get_selected_service().source_index {
+                    0 => "https://chatgpt.com/codex/settings/usage",
+                    1 => "https://claude.ai/settings/usage",
+                    _ => "https://www.codebuddy.cn/work/",
+                };
+                if let Err(error) = platform_windows::open_url(url) {
+                    eprintln!("Opening provider website: {error}");
+                }
+            }
+        });
+    }
     {
         let weak = detail.as_weak();
         let cap = capsule.as_weak();
@@ -406,8 +441,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         let settings_weak = settings.as_weak();
         let pref = preferences.clone();
         let model = model.clone();
+        let origin = edge_origin.clone();
         settings.on_set_pinned(move |enabled| {
             if let (Some(c), Some(s)) = (cap.upgrade(), settings_weak.upgrade()) {
+                origin.set(None);
                 set_mode(
                     if enabled { Mode::Pinned } else { Mode::Popup },
                     &pref,
@@ -423,6 +460,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let settings_weak = settings.as_weak();
         let pref = preferences.clone();
         let model = model.clone();
+        let details = detail.as_weak();
         settings.on_toggle_service(move |index, enabled| {
             if let Ok(i) = usize::try_from(index) {
                 if i < 3 {
@@ -433,6 +471,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                     if let (Some(c), Some(s)) = (cap.upgrade(), settings_weak.upgrade()) {
                         refresh_model(&model, &c, &s, &value);
+                        if c.get_selected_index() == index && !enabled {
+                            c.set_selected_index(-1);
+                            if let Some(d) = details.upgrade() {
+                                let _ = d.hide();
+                            }
+                        }
                     }
                 }
             }
@@ -458,6 +502,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let cap = capsule.as_weak();
         let pref = preferences.clone();
         let settings_weak = settings.as_weak();
+        let detail_weak = detail.as_weak();
         settings.on_set_animations(move |enabled| {
             let mut value = pref.borrow_mut();
             value.animations_enabled = enabled;
@@ -469,6 +514,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             if let Some(s) = settings_weak.upgrade() {
                 s.set_animations_on(enabled);
+            }
+            if let Some(d) = detail_weak.upgrade() {
+                d.set_animated(enabled);
             }
         });
     }
@@ -492,12 +540,86 @@ fn main() -> Result<(), Box<dyn Error>> {
         });
     }
     {
+        let weak = settings.as_weak();
+        settings.on_set_startup(move |enabled| {
+            if let Some(s) = weak.upgrade() {
+                match platform_windows::set_startup(enabled) {
+                    Ok(()) => {
+                        s.set_startup_on(platform_windows::startup_enabled());
+                        s.set_status_message("".into());
+                    }
+                    Err(error) => {
+                        s.set_status_message(error.into());
+                    }
+                }
+            }
+        });
+    }
+    {
+        let weak = settings.as_weak();
+        settings.on_open_link(move |index| {
+            let url = match index {
+                1 => "https://github.com/zhenyueyue/Wacu/issues",
+                2 => "https://github.com/zhenyueyue/Wacu#readme",
+                3 => "https://github.com/zhenyueyue/Wacu/releases",
+                _ => "https://github.com/zhenyueyue/Wacu",
+            };
+            if let Some(s) = weak.upgrade() {
+                s.set_status_message(match platform_windows::open_url(url) {
+                    Ok(()) => "".into(),
+                    Err(error) => error.into(),
+                });
+            }
+        });
+    }
+    {
+        let pref = preferences.clone();
+        let weak = settings.as_weak();
+        settings.on_set_edge_hide(move |enabled| {
+            let mut value = pref.borrow_mut();
+            value.edge_hide = enabled;
+            if let Some(s) = weak.upgrade() {
+                s.set_edge_hide_on(enabled);
+                s.set_status_message(match state::save(&value) {
+                    Ok(()) => "".into(),
+                    Err(error) => error.into(),
+                });
+            }
+        });
+    }
+    {
         let cap = capsule.as_weak();
         let pref = preferences.clone();
+        let weak = settings.as_weak();
+        let origin = edge_origin.clone();
+        settings.on_set_dock_side(move |index| {
+            let mut value = pref.borrow_mut();
+            value.dock_left = index == 1;
+            value.saved_position = None;
+            origin.set(None);
+            if let Some(c) = cap.upgrade() {
+                if value.mode == Mode::Pinned {
+                    place_capsule(&c, &value, None);
+                }
+            }
+            if let Some(s) = weak.upgrade() {
+                s.set_dock_side(if value.dock_left { 1 } else { 0 });
+                s.set_status_message(match state::save(&value) {
+                    Ok(()) => "".into(),
+                    Err(error) => error.into(),
+                });
+            }
+        });
+    }
+    {
+        let cap = capsule.as_weak();
+        let pref = preferences.clone();
+        let origin = edge_origin.clone();
         settings.on_reset_position(move || {
             if let Some(c) = cap.upgrade() {
                 let mut value = pref.borrow_mut();
                 value.saved_position = None;
+                origin.set(None);
                 let _ = state::save(&value);
                 if value.mode == Mode::Pinned {
                     place_capsule(&c, &value, None);
@@ -548,11 +670,25 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Debug-only visual QA; does not exist in the Release application.
     #[cfg(debug_assertions)]
     if !qa_view.is_empty() {
+        if qa_view == "capsule" {
+            let selected = std::env::var("WACU_QA_SELECTED")
+                .ok()
+                .and_then(|value| value.parse::<i32>().ok())
+                .unwrap_or(-1);
+            capsule.set_selected_index(selected);
+        }
         match qa_view.as_str() {
             "quick" | "detail" => {
                 show_detail(&detail, &capsule, 1, &initial);
                 if qa_view == "detail" {
                     detail.set_expanded(true);
+                    detail.set_selected_period(
+                        std::env::var("WACU_QA_PERIOD")
+                            .ok()
+                            .and_then(|value| value.parse::<i32>().ok())
+                            .unwrap_or(0)
+                            .clamp(0, 3),
+                    );
                     let d = detail.as_weak();
                     let c = capsule.as_weak();
                     Timer::single_shot(Duration::from_millis(150), move || {
@@ -614,11 +750,16 @@ fn main() -> Result<(), Box<dyn Error>> {
                 if let Err(error) = result {
                     eprintln!("Wacu preview snapshot failed: {error}");
                 }
+            } else {
+                eprintln!("Wacu preview snapshot unavailable");
+            }
+            if std::env::var_os("WACU_QA_EXIT").is_some() {
+                let _ = slint::quit_event_loop();
             }
         });
     }
 
-    // Low-frequency housekeeping: no rendering or network polling during idle.
+    // Low-frequency pointer/focus checks. No animation frames or network polling.
     let housekeeping = Timer::default();
     {
         let cap = capsule.as_weak();
@@ -626,38 +767,96 @@ fn main() -> Result<(), Box<dyn Error>> {
         let prefs = preferences.clone();
         let popup_open = last_popup_open.clone();
         let last_pos = Rc::new(RefCell::new(None::<(i32, i32)>));
-        housekeeping.start(TimerMode::Repeated, Duration::from_millis(950), move || {
+        let origin = edge_origin.clone();
+        let last_save = Rc::new(Cell::new(Instant::now()));
+        let edge_revealed = Rc::new(Cell::new(Instant::now() - Duration::from_secs(1)));
+        housekeeping.start(TimerMode::Repeated, Duration::from_millis(200), move || {
             let Some(c) = cap.upgrade() else { return };
+            #[cfg(debug_assertions)]
+            if std::env::var_os("WACU_QA_VIEW").is_some() {
+                return;
+            }
+            let mut detail_active = false;
             if let Some(d) = details.upgrade() {
+                detail_active = d.window().is_visible()
+                    && (platform_windows::is_foreground(d.window())
+                        || platform_windows::cursor_is_over(d.window()));
                 if d.window().is_visible()
                     && !platform_windows::is_foreground(d.window())
                     && !platform_windows::is_foreground(c.window())
+                    && !platform_windows::cursor_is_over(d.window())
+                    && !platform_windows::cursor_is_over(c.window())
                 {
                     let _ = d.hide();
+                    c.set_selected_index(-1);
                 }
             }
             if !c.window().is_visible() {
                 return;
             }
             if prefs.borrow().mode == Mode::Popup {
+                if origin.take().is_some() {
+                    place_capsule(&c, &prefs.borrow(), None);
+                }
                 // Windows may temporarily retain focus on the taskbar overflow/menu.
                 // Give a newly opened popup time to receive focus and let pointer hover
                 // prevent accidental dismissal when SetForegroundWindow is denied.
                 if popup_open.get().elapsed() > Duration::from_millis(1500)
                     && !platform_windows::is_foreground(c.window())
                     && !platform_windows::cursor_is_over(c.window())
+                    && !detail_active
                 {
                     c.set_revealed(false);
                     let _ = c.hide();
                 }
             } else {
-                #[cfg(debug_assertions)]
-                if std::env::var_os("WACU_QA_VIEW").is_some() {
-                    return;
+                if let Some(original) = origin.get() {
+                    if !prefs.borrow().edge_hide
+                        || platform_windows::cursor_is_over(c.window())
+                        || detail_active
+                    {
+                        c.window()
+                            .set_position(PhysicalPosition::new(original.x, original.y));
+                        origin.set(None);
+                        // The edge target lies outside the restored window; give the
+                        // pointer time to cross the desktop margin into the capsule.
+                        edge_revealed.set(Instant::now());
+                    } else {
+                        return;
+                    }
                 }
                 let pos = c.window().position();
+                let point = Point { x: pos.x, y: pos.y };
+                let size = capsule_dimensions(&c);
+                let area = platform_windows::work_area_at(Point {
+                    x: pos.x + size.0 / 2,
+                    y: pos.y + size.1 / 2,
+                });
+                if prefs.borrow().edge_hide
+                    && !detail_active
+                    && !platform_windows::cursor_is_over(c.window())
+                    && edge_revealed.get().elapsed() > Duration::from_millis(800)
+                {
+                    if let Some(hidden) =
+                        edge_position(point, size, area, c.window().scale_factor())
+                    {
+                        // Persist the visible position, never the off-screen hidden position.
+                        let mut value = prefs.borrow_mut();
+                        if value.saved_position != Some((point.x, point.y)) {
+                            value.saved_position = Some((point.x, point.y));
+                            let _ = state::save(&value);
+                        }
+                        origin.set(Some(point));
+                        c.window()
+                            .set_position(PhysicalPosition::new(hidden.x, hidden.y));
+                        return;
+                    }
+                }
                 let current = (pos.x, pos.y);
-                if last_pos.borrow().as_ref() != Some(&current) {
+                if last_pos.borrow().as_ref() != Some(&current)
+                    && last_save.get().elapsed() >= Duration::from_secs(1)
+                {
+                    last_save.set(Instant::now());
                     *last_pos.borrow_mut() = Some(current);
                     let mut prefs = prefs.borrow_mut();
                     if prefs.saved_position != Some(current) {
@@ -693,5 +892,20 @@ mod tests {
         );
         assert_eq!(visible_service_indices(&[false, false, false]).count(), 0);
         assert_eq!(service(2, true).source_index, 2);
+        assert_eq!(
+            visible_service_indices(&[true; 3]).collect::<Vec<_>>(),
+            vec![1, 0, 2]
+        );
+    }
+
+    #[test]
+    fn demo_usage_and_remaining_are_consistent() {
+        for index in 0..3 {
+            let item = service(index, true);
+            let used: i32 = item.used.parse().unwrap();
+            let remaining: i32 = item.remaining.parse().unwrap();
+            assert_eq!(used + remaining, 1000);
+            assert_eq!(item.percent, used / 10);
+        }
     }
 }

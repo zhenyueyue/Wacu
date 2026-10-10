@@ -48,6 +48,46 @@ pub fn pinned(size: (i32, i32), area: WorkArea) -> Point {
     )
 }
 
+pub fn docked(size: (i32, i32), area: WorkArea, left: bool) -> Point {
+    if !left {
+        return pinned(size, area);
+    }
+    constrain(
+        Point {
+            x: area.left + 15,
+            y: area.top + (area.bottom - area.top - size.1) / 2,
+        },
+        size,
+        area,
+    )
+}
+
+/// The visible surface starts 12px inside its transparent native window.
+/// Leave a 6px grab target at the chosen monitor edge.
+pub fn edge_position(
+    position: Point,
+    size: (i32, i32),
+    area: WorkArea,
+    scale: f32,
+) -> Option<Point> {
+    let margin = (12.0 * scale).round() as i32;
+    let grab = (6.0 * scale).round() as i32;
+    let threshold = (32.0 * scale).round() as i32;
+    if position.x + margin <= area.left + threshold {
+        Some(Point {
+            x: area.left - size.0 + margin + grab,
+            y: position.y,
+        })
+    } else if position.x + size.0 - margin >= area.right - threshold {
+        Some(Point {
+            x: area.right - margin - grab,
+            y: position.y,
+        })
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,5 +128,29 @@ mod tests {
         let pos = pinned((104, 440), a);
         assert!(pos.x >= 1920 && pos.x + 104 <= 3840);
         assert!(pos.y >= 0 && pos.y + 440 <= 1030);
+    }
+
+    #[test]
+    fn edge_hidden_leaves_a_surface_grab_target() {
+        let area = WorkArea {
+            left: -1920,
+            top: 0,
+            right: 0,
+            bottom: 1040,
+        };
+        let size = (72, 244);
+        let left = docked(size, area, true);
+        let right = docked(size, area, false);
+        let hidden_left = edge_position(left, size, area, 1.0).unwrap();
+        let hidden_right = edge_position(right, size, area, 1.0).unwrap();
+        assert_eq!(hidden_left.x + size.0 - 12, area.left + 6);
+        assert_eq!(hidden_right.x + 12, area.right - 6);
+        assert_eq!(hidden_left.y, left.y);
+        assert_eq!(
+            edge_position(Point { x: -900, y: 100 }, size, area, 1.0),
+            None
+        );
+        let scaled = edge_position(Point { x: -160, y: 80 }, (144, 488), area, 2.0).unwrap();
+        assert_eq!(scaled.x + 24, area.right - 12);
     }
 }
