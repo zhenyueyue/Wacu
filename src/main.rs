@@ -443,16 +443,20 @@ fn main() -> Result<(), Box<dyn Error>> {
         capsule.on_start_drag(move || {
             preview.set(false);
             active_drag.set(true);
+            if let Some(c) = weak.upgrade() {
+                c.set_logo_dragging(true);
+            }
             let cap = weak.clone();
             let prefs = prefs.clone();
             let active_drag = active_drag.clone();
             let last_open = last_open.clone();
-            // Let Slint finish processing mouse-down before the OS drag loop.
-            Timer::single_shot(Duration::ZERO, move || {
+            // Give Slint one frame to show the pressed avatar before native dragging.
+            Timer::single_shot(Duration::from_millis(35), move || {
                 if let Some(c) = cap.upgrade() {
                     platform_windows::begin_drag(c.window());
                     last_open.set(Instant::now());
                     remember_position(&c, &prefs, None);
+                    c.set_logo_dragging(false);
                 }
                 active_drag.set(false);
             });
@@ -1068,6 +1072,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             });
         }
         if qa_view == "capsule" {
+            capsule.set_logo_dragging(std::env::var_os("WACU_QA_LOGO_DRAG").is_some());
+            capsule
+                .set_preview_settings_pressed(std::env::var_os("WACU_QA_SETTINGS_PRESS").is_some());
             let selected = std::env::var("WACU_QA_SELECTED")
                 .ok()
                 .and_then(|value| value.parse::<i32>().ok())

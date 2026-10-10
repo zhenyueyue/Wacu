@@ -9,6 +9,8 @@ $cases = @(
     @{ View = 'capsule'; Name = 'capsule'; Count = 3 },
     @{ View = 'capsule'; Name = 'capsule-compact'; Count = 3; Size = 0 },
     @{ View = 'capsule'; Name = 'capsule-spacious'; Count = 3; Size = 2 },
+    @{ View = 'capsule'; Name = 'capsule-logo-drag'; Count = 3; Size = 1; LogoDrag = 1 },
+    @{ View = 'capsule'; Name = 'capsule-gear-pressed'; Count = 3; Size = 1; GearPressed = 1 },
     @{ View = 'capsule'; Name = 'capsule-selected'; Count = 3; Selected = 1 },
     @{ View = 'capsule'; Name = 'capsule-empty'; Count = 0 },
     @{ View = 'capsule'; Name = 'capsule-one'; Count = 1 },
@@ -38,6 +40,8 @@ foreach ($case in $cases) {
     $start.Environment['WACU_QA_PERIOD'] = [string]$case.Period
     $start.Environment['WACU_QA_SELECTED'] = [string]$case.Selected
     $start.Environment['WACU_QA_SIZE'] = [string]$case.Size
+    if ($case.LogoDrag) { $start.Environment['WACU_QA_LOGO_DRAG'] = '1' }
+    if ($case.GearPressed) { $start.Environment['WACU_QA_SETTINGS_PRESS'] = '1' }
     $start.Environment['WACU_QA_EXIT'] = '1'
     [void]$start.Environment.Remove('WACU_QA_INPUT')
     if ($case.Input) {

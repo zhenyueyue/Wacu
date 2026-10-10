@@ -27,13 +27,16 @@ component Glyph inherits Image {
 component IconButton inherits Rectangle {
     in property <image> icon;
     in property <bool> animated: true;
+    in property <bool> circular: false;
+    in property <bool> preview-pressed: false;
     in property <float> ui-scale: Tokens.panel-scale;
     in property <length> icon-size: 20px * root.ui-scale;
     in property <length> icon-top: (root.height - root.icon-size) / 2;
     callback activated();
-    width: 32px * root.ui-scale; height: 32px * root.ui-scale; border-radius: 8px * root.ui-scale;
-    background: hit.pressed ? #35353b : (hit.has-hover ? Tokens.raised : transparent);
-    animate background { duration: root.animated ? 100ms : 0ms; easing: ease-out; }
+    width: 32px * root.ui-scale; height: 32px * root.ui-scale;
+    border-radius: root.circular ? min(root.width, root.height) / 2 : 8px * root.ui-scale;
+    background: hit.pressed || root.preview-pressed ? #35353b : (hit.has-hover ? Tokens.raised : transparent);
+    animate background { duration: root.animated ? 120ms : 0ms; easing: ease-out; }
     Glyph { x: (parent.width - self.width) / 2; y: root.icon-top; width: root.icon-size; height: root.icon-size; source: root.icon; }
     hit := TouchArea { mouse-cursor: pointer; clicked => { root.activated(); } }
 }
@@ -79,21 +82,27 @@ component QuotaItem inherits Rectangle {
             stroke-width: root.ring-width; stroke-line-cap: round; fill: transparent;
         }
         Rectangle {
-            x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2 + (hit.pressed ? 1px : (hit.has-hover ? -1px : 0px));
             width: root.size-mode == 0 ? 20px : (root.size-mode == 1 ? 28px : 36px);
             height: self.width; border-radius: self.width / 2;
+            animate y { duration: root.animated ? 120ms : 0ms; easing: ease-out; }
             background: root.service.source-index == 1 ? #ff7042 : root.service.accent;
             drop-shadow-blur: root.selected ? 8px : 0px; drop-shadow-color: #3b82f666;
             Rectangle {
                 x: parent.width * 0.24; y: parent.height * 0.35;
-                width: parent.width * 0.17; height: self.width;
+                width: parent.width * 0.17;
+                height: hit.pressed ? max(2px, self.width * 0.35) : self.width;
                 border-radius: self.width / 2;
+                animate height { duration: root.animated ? 90ms : 0ms; easing: ease-out; }
                 background: root.service.source-index == 1 ? #fff9ef : #121215;
             }
             Rectangle {
                 x: parent.width * 0.60; y: parent.height * 0.35;
-                width: parent.width * 0.17; height: self.width;
+                width: parent.width * 0.17;
+                height: hit.pressed ? max(2px, self.width * 0.35) : self.width;
                 border-radius: self.width / 2;
+                animate height { duration: root.animated ? 90ms : 0ms; easing: ease-out; }
                 background: root.service.source-index == 1 ? #fff9ef : #121215;
             }
         }
@@ -120,9 +129,10 @@ export component CapsuleWindow inherits Window {
     width: root.size-mode == 0 ? 72px : (root.size-mode == 1 ? 88px : 104px);
     property <length> item-height: root.size-mode == 0 ? 52px : (root.size-mode == 1 ? 70px : 84px);
     property <length> settings-height: root.size-mode == 0 ? 16px : (root.size-mode == 1 ? 20px : 24px);
+    property <length> settings-button-size: root.size-mode == 0 ? 32px : (root.size-mode == 1 ? 40px : 48px);
     property <length> logo-size: root.size-mode == 0 ? 32px : (root.size-mode == 1 ? 40px : 48px);
     property <length> area-gap: root.size-mode == 0 ? 12px : (root.size-mode == 1 ? 16px : 20px);
-    height: 56px + root.logo-size + root.area-gap * 2 + root.settings-height + root.item-height * max(1, visible-count);
+    height: 56px + root.logo-size + root.area-gap * 2 + root.settings-button-size + root.item-height * max(1, visible-count);
     background: transparent; no-frame: true; always-on-top: true; default-font-family: "Segoe UI";
     icon: @image-url("../assets/app-icon.png");
     in property <[Service]> services;
@@ -132,6 +142,8 @@ export component CapsuleWindow inherits Window {
     in-out property <bool> revealed: false;
     in property <bool> animated: true;
     in property <float> surface-opacity: 0.95;
+    in-out property <bool> logo-dragging: false;
+    in property <bool> preview-settings-pressed: false;
     callback open-service(int);
     callback open-settings();
     callback start-drag();
@@ -153,14 +165,29 @@ export component CapsuleWindow inherits Window {
                 height: root.logo-size; alignment: center;
                 Rectangle {
                     width: root.logo-size; height: root.logo-size;
+                    Rectangle {
+                        x: -2px; y: -2px; width: parent.width + 4px; height: parent.height + 4px;
+                        border-radius: self.width / 2; background: #284b42;
+                        opacity: root.logo-dragging ? 0.52 : (logo-hit.has-hover ? 0.16 : 0);
+                        animate opacity { duration: root.animated ? 160ms : 0ms; easing: ease-out; }
+                    }
                     Image {
-                        x: 0px; y: 0px; width: parent.width; height: parent.height;
+                        width: parent.width * (root.logo-dragging ? 0.91 : (logo-hit.has-hover ? 1.04 : 1));
+                        height: self.width;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2 + (root.logo-dragging ? -1px : 0px);
                         source: root.size-mode == 0 ? @image-url("../assets/logo-compact.png") : (root.size-mode == 1 ? @image-url("../assets/logo-standard.png") : @image-url("../assets/logo-spacious.png"));
                         image-fit: contain; image-rendering: smooth;
+                        animate width, height, x, y { duration: root.animated ? 160ms : 0ms; easing: ease-out; }
                     }
-                    TouchArea {
+                    logo-hit := TouchArea {
                         x: 0px; y: 0px; width: parent.width; height: parent.height; mouse-cursor: pointer;
-                        pointer-event(event) => { if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) { root.start-drag(); } }
+                        pointer-event(event) => {
+                            if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                                root.logo-dragging = true;
+                                root.start-drag();
+                            }
+                        }
                     }
                 }
             }
@@ -177,8 +204,16 @@ export component CapsuleWindow inherits Window {
             }
             Rectangle { height: root.area-gap; }
             HorizontalLayout {
-                height: root.settings-height; alignment: center;
-                IconButton { height: root.settings-height; ui-scale: root.size-mode == 0 ? 1 : (root.size-mode == 1 ? 1.25 : 1.5); icon-size: root.settings-height; icon-top: 0px; icon: @image-url("../assets/icons/settings.svg"); animated: root.animated; activated => { root.open-settings(); } }
+                height: root.settings-button-size; alignment: center;
+                IconButton {
+                    circular: true;
+                    preview-pressed: root.preview-settings-pressed;
+                    ui-scale: root.size-mode == 0 ? 1 : (root.size-mode == 1 ? 1.25 : 1.5);
+                    icon-size: root.settings-height;
+                    icon: @image-url("../assets/icons/settings.svg");
+                    animated: root.animated;
+                    activated => { root.open-settings(); }
+                }
             }
         }
     }
