@@ -16,7 +16,7 @@ $cases = @(
     @{ View = 'capsule'; Name = 'capsule-empty'; Count = 0 },
     @{ View = 'capsule'; Name = 'capsule-one'; Count = 1 },
     @{ View = 'capsule'; Name = 'capsule-two'; Count = 2 },
-    @{ View = 'quick'; Name = 'quick-detail'; Count = 3 },
+    @{ View = 'quick'; Name = 'quick-detail'; Count = 3; DragDetail = 1 },
     @{ View = 'detail'; Name = 'full-detail'; Count = 3; Period = 0 },
     @{ View = 'detail'; Name = 'detail-week'; Count = 3; Period = 1 },
     @{ View = 'detail'; Name = 'detail-month'; Count = 3; Period = 2 },
@@ -44,6 +44,7 @@ foreach ($case in $cases) {
     if ($case.LogoDrag) { $start.Environment['WACU_QA_LOGO_DRAG'] = '1' }
     if ($case.GearPressed) { $start.Environment['WACU_QA_SETTINGS_PRESS'] = '1' }
     if ($case.ContainsKey('ServicePressed')) { $start.Environment['WACU_QA_SERVICE_PRESS'] = [string]$case.ServicePressed }
+    if ($case.DragDetail) { $start.Environment['WACU_QA_DRAG_DETAIL'] = '1' }
     $start.Environment['WACU_QA_EXIT'] = '1'
     [void]$start.Environment.Remove('WACU_QA_INPUT')
     if ($case.Input) {
@@ -60,6 +61,9 @@ foreach ($case in $cases) {
         throw ('预览失败: ' + $case.Name + ' ' + $diagnostics)
     }
     if ($case.Input -and $diagnostics -notmatch 'WACU_QA input_pass') { throw ('输入检查未通过: ' + $diagnostics) }
+    if ($case.DragDetail -and $diagnostics -notmatch 'WACU_QA detail_hide_restore_pass') {
+        throw ('详情拖动恢复检查未通过: ' + $diagnostics)
+    }
     $destination = Join-Path $root ('target\qa-' + $case.Name + '.png')
     Copy-Item -LiteralPath $source -Destination $destination -Force
     if ($Archive -and !$case.Input) {

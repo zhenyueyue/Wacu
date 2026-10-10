@@ -246,7 +246,6 @@ fn position_detail(detail: &DetailWindow, capsule: &CapsuleWindow) {
     } else {
         cp.x - ds.width as i32 + margin
     };
-    capsule.set_panel_on_left(x < cp.x);
     let dest = constrain(
         Point { x, y: cp.y },
         (ds.width as i32, ds.height as i32),
@@ -255,6 +254,14 @@ fn position_detail(detail: &DetailWindow, capsule: &CapsuleWindow) {
     detail
         .window()
         .set_position(PhysicalPosition::new(dest.x, dest.y));
+}
+
+// Windows' native caption-move loop blocks Slint UI timers. Hide the separate
+// detail panel before entering that loop; after mouse-up, anchor it at the new
+// capsule location before making it visible again.
+fn restore_detail_after_drag(detail: &DetailWindow, capsule: &CapsuleWindow) {
+    position_detail(detail, capsule);
+    let _ = detail.show();
 }
 
 fn show_detail(detail: &DetailWindow, capsule: &CapsuleWindow, index: usize, prefs: &Preferences) {
@@ -440,6 +447,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let preview = startup_preview.clone();
         let active_drag = dragging.clone();
         let last_open = last_popup_open.clone();
+        let detail_weak = detail.as_weak();
         capsule.on_start_drag(move || {
             preview.set(false);
             active_drag.set(true);
@@ -450,13 +458,29 @@ fn main() -> Result<(), Box<dyn Error>> {
             let prefs = prefs.clone();
             let active_drag = active_drag.clone();
             let last_open = last_open.clone();
-            // Give Slint one frame to show the pressed avatar before native dragging.
+            let detail_weak = detail_weak.clone();
+            // Immediately hide an open detail so it never remains in the old spot.
+            let restore_detail = detail_weak
+                .upgrade()
+                .is_some_and(|d| d.window().is_visible());
+            if restore_detail {
+                if let Some(d) = detail_weak.upgrade() {
+                    let _ = d.hide();
+                }
+            }
+            // Allow the avatar's pressed state one frame before the native drag.
             Timer::single_shot(Duration::from_millis(35), move || {
                 if let Some(c) = cap.upgrade() {
                     platform_windows::begin_drag(c.window());
+                    // The Windows move loop has now ended (mouse released).
                     last_open.set(Instant::now());
                     remember_position(&c, &prefs, None);
                     c.set_logo_dragging(false);
+                    if restore_detail {
+                        if let Some(d) = detail_weak.upgrade() {
+                            restore_detail_after_drag(&d, &c);
+                        }
+                    }
                 }
                 active_drag.set(false);
             });
@@ -1090,6 +1114,55 @@ fn main() -> Result<(), Box<dyn Error>> {
         match qa_view.as_str() {
             "quick" | "detail" => {
                 show_detail(&detail, &capsule, 1, &initial);
+                if std::env::var_os("WACU_QA_DRAG_DETAIL").is_some() {
+                    let cap = capsule.as_weak();
+                    let det = detail.as_weak();
+                    Timer::single_shot(Duration::from_millis(280), move || {
+                        let c = cap.upgrade().unwrap();
+                        let d = det.upgrade().unwrap();
+                        assert!(d.window().is_visible());
+                        let before = c.window().position();
+                        let old_detail = d.window().position();
+                        let area = platform_windows::work_area_at(Point {
+                            x: before.x,
+                            y: before.y,
+                        });
+                        let capsule_size = capsule_dimensions(&c);
+                        let dx = if before.x - area.left >= 90 { -75 } else { 75 };
+                        let target = constrain(
+                            Point {
+                                x: before.x + dx,
+                                y: before.y,
+                            },
+                            capsule_size,
+                            area,
+                        );
+                        assert_ne!((before.x, before.y), (target.x, target.y));
+                        let selection = c.get_selected_index();
+                        let provider = d.get_selected_service().source_index;
+                        let _ = d.hide();
+                        assert!(
+                            !d.window().is_visible(),
+                            "Detail should disappear during drag"
+                        );
+                        c.window()
+                            .set_position(PhysicalPosition::new(target.x, target.y));
+                        restore_detail_after_drag(&d, &c);
+                        assert!(
+                            d.window().is_visible(),
+                            "Detail should reopen after mouse-up"
+                        );
+                        assert_eq!(c.get_selected_index(), selection);
+                        assert_eq!(d.get_selected_service().source_index, provider);
+                        let after_detail = d.window().position();
+                        assert_ne!(
+                            (old_detail.x, old_detail.y),
+                            (after_detail.x, after_detail.y),
+                            "Detail remained at its original desktop position"
+                        );
+                        eprintln!("WACU_QA detail_hide_restore_pass");
+                    });
+                }
                 if qa_view == "detail" {
                     detail.set_expanded(true);
                     detail.set_selected_period(

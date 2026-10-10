@@ -46,7 +46,6 @@ component IconButton inherits Rectangle {
 component QuotaItem inherits Rectangle {
     in property <Service> service;
     in property <bool> selected: false;
-    in property <bool> panel-on-left: false;
     in property <bool> animated: true;
     in property <bool> preview-pressed: false;
     property <bool> is-pressed: hit.pressed || root.preview-pressed;
@@ -115,11 +114,6 @@ component QuotaItem inherits Rectangle {
         font-family: "Bahnschrift"; font-weight: 500; color: Tokens.text;
         horizontal-alignment: center; vertical-alignment: center;
     }
-    if root.selected: Path {
-        x: root.panel-on-left ? -8px : root.width; y: (root.size-mode == 0 ? 36px : (root.size-mode == 1 ? 50px : 62px)) / 2 - 6px; width: 8px; height: 12px;
-        commands: root.panel-on-left ? "M 0 6 L 8 0 L 8 12 Z" : "M 8 6 L 0 0 L 0 12 Z";
-        fill: Tokens.blue;
-    }
     hit := TouchArea { mouse-cursor: pointer; clicked => { root.activated(); } }
 }
 
@@ -138,7 +132,6 @@ export component CapsuleWindow inherits Window {
     in property <[Service]> services;
     in property <int> visible-count: 3;
     in-out property <int> selected-index: -1;
-    in-out property <bool> panel-on-left: false;
     in-out property <bool> revealed: false;
     in property <bool> animated: true;
     in property <float> surface-opacity: 0.95;
@@ -201,7 +194,7 @@ export component CapsuleWindow inherits Window {
                 service: service; size-mode: root.size-mode;
                 preview-pressed: root.preview-pressed-service == service.source-index;
                 selected: root.selected-index == service.source-index;
-                panel-on-left: root.panel-on-left; animated: root.animated;
+                animated: root.animated;
                 activated => { root.open-service(service.source-index); }
             }
             Rectangle { height: root.area-gap; }
