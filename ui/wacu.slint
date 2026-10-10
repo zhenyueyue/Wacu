@@ -109,10 +109,10 @@ export component CapsuleWindow inherits Window {
     in property <int> size-mode: 1;
     width: root.size-mode == 0 ? 72px : (root.size-mode == 1 ? 88px : 104px);
     property <length> item-height: root.size-mode == 0 ? 52px : (root.size-mode == 1 ? 70px : 84px);
-    property <length> action-size: root.size-mode == 0 ? 32px : (root.size-mode == 1 ? 40px : 48px);
+    property <length> settings-height: root.size-mode == 0 ? 16px : (root.size-mode == 1 ? 20px : 24px);
     property <length> logo-size: root.size-mode == 0 ? 32px : (root.size-mode == 1 ? 40px : 48px);
     property <length> area-gap: root.size-mode == 0 ? 12px : (root.size-mode == 1 ? 16px : 20px);
-    height: 56px + root.logo-size + root.area-gap * 2 + root.action-size + root.item-height * max(1, visible-count);
+    height: 56px + root.logo-size + root.area-gap * 2 + root.settings-height + root.item-height * max(1, visible-count);
     background: transparent; no-frame: true; always-on-top: true; default-font-family: "Segoe UI";
     icon: @image-url("../assets/tray.svg");
     in property <[Service]> services;
@@ -168,8 +168,8 @@ export component CapsuleWindow inherits Window {
             }
             Rectangle { height: root.area-gap; }
             HorizontalLayout {
-                height: root.action-size; alignment: center;
-                IconButton { ui-scale: root.size-mode == 0 ? 1 : (root.size-mode == 1 ? 1.25 : 1.5); icon-size: root.size-mode == 0 ? 16px : (root.size-mode == 1 ? 20px : 24px); icon-top: 0px; icon: @image-url("../assets/icons/settings.svg"); animated: root.animated; activated => { root.open-settings(); } }
+                height: root.settings-height; alignment: center;
+                IconButton { height: root.settings-height; ui-scale: root.size-mode == 0 ? 1 : (root.size-mode == 1 ? 1.25 : 1.5); icon-size: root.settings-height; icon-top: 0px; icon: @image-url("../assets/icons/settings.svg"); animated: root.animated; activated => { root.open-settings(); } }
             }
         }
     }
