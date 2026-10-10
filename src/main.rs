@@ -272,6 +272,21 @@ fn show_detail(detail: &DetailWindow, capsule: &CapsuleWindow, index: usize, pre
     });
 }
 
+#[cfg(debug_assertions)]
+fn qa_click(window: &slint::Window, x: f32, y: f32) {
+    use slint::platform::WindowEvent;
+    let position = slint::LogicalPosition::new(x, y);
+    window.dispatch_event(WindowEvent::PointerMoved { position });
+    window.dispatch_event(WindowEvent::PointerPressed {
+        position,
+        button: slint::platform::PointerEventButton::Left,
+    });
+    window.dispatch_event(WindowEvent::PointerReleased {
+        position,
+        button: slint::platform::PointerEventButton::Left,
+    });
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let initial = state::load();
     #[cfg(debug_assertions)]
@@ -722,6 +737,77 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Debug-only visual QA; does not exist in the Release application.
     #[cfg(debug_assertions)]
     if !qa_view.is_empty() {
+        if qa_view == "settings" && std::env::var_os("WACU_QA_INPUT").is_some() {
+            // The capture script supplies an isolated APPDATA for this input case.
+            let expected = std::env::current_dir()?
+                .join("target")
+                .join("qa-input-profile");
+            let actual = std::env::var("APPDATA")
+                .unwrap_or_default()
+                .replace('/', "\\");
+            if !actual.eq_ignore_ascii_case(&expected.to_string_lossy().replace('/', "\\")) {
+                return Err(
+                    "WACU_QA_INPUT requires the isolated target/qa-input-profile APPDATA".into(),
+                );
+            }
+            let s = settings.as_weak();
+            Timer::single_shot(Duration::from_millis(300), move || {
+                if let Some(s) = s.upgrade() {
+                    qa_click(s.window(), 320.0, 462.0);
+                }
+            });
+            let s = settings.as_weak();
+            Timer::single_shot(Duration::from_millis(400), move || {
+                if let Some(s) = s.upgrade() {
+                    qa_click(s.window(), 390.0, 520.0);
+                }
+            });
+            let s = settings.as_weak();
+            Timer::single_shot(Duration::from_millis(450), move || {
+                if let Some(s) = s.upgrade() {
+                    if let Ok(snapshot) = s.window().take_snapshot() {
+                        let mut encoder = png::Encoder::new(
+                            std::fs::File::create("target/qa-settings-popup.png").unwrap(),
+                            snapshot.width(),
+                            snapshot.height(),
+                        );
+                        encoder.set_color(png::ColorType::Rgba);
+                        encoder.set_depth(png::BitDepth::Eight);
+                        encoder
+                            .write_header()
+                            .unwrap()
+                            .write_image_data(snapshot.as_bytes())
+                            .unwrap();
+                    }
+                }
+            });
+            let s = settings.as_weak();
+            Timer::single_shot(Duration::from_millis(500), move || {
+                use slint::platform::{Key, WindowEvent};
+                if let Some(s) = s.upgrade() {
+                    for key in [Key::DownArrow, Key::Return] {
+                        s.window()
+                            .dispatch_event(WindowEvent::KeyPressed { text: key.into() });
+                        s.window()
+                            .dispatch_event(WindowEvent::KeyReleased { text: key.into() });
+                    }
+                }
+            });
+            let prefs = preferences.clone();
+            Timer::single_shot(Duration::from_millis(650), move || {
+                let value = prefs.borrow();
+                assert!(
+                    (68..=75).contains(&value.opacity_percent),
+                    "Native slider input was blocked: {}",
+                    value.opacity_percent
+                );
+                assert!(value.dock_left, "Native ComboBox selection was blocked");
+                eprintln!(
+                    "WACU_QA input_pass opacity={} dock=left",
+                    value.opacity_percent
+                );
+            });
+        }
         if qa_view == "capsule" {
             let selected = std::env::var("WACU_QA_SELECTED")
                 .ok()

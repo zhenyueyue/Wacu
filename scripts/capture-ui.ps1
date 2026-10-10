@@ -23,6 +23,7 @@ $pages = @('general', 'services', 'appearance', 'behavior', 'about')
 for ($page = 0; $page -lt $pages.Count; $page++) {
     $cases += @{ View = 'settings'; Name = 'settings-' + $pages[$page]; Count = 3; Page = $page }
 }
+$cases += @{ View = 'settings'; Name = 'settings-input-check'; Count = 3; Page = 0; Input = 1 }
 foreach ($case in $cases) {
     $source = Join-Path $root ('target\wacu-qa-' + $case.View + '.png')
     if (Test-Path -LiteralPath $source) { Remove-Item -LiteralPath $source }
@@ -38,6 +39,11 @@ foreach ($case in $cases) {
     $start.Environment['WACU_QA_SELECTED'] = [string]$case.Selected
     $start.Environment['WACU_QA_SIZE'] = [string]$case.Size
     $start.Environment['WACU_QA_EXIT'] = '1'
+    [void]$start.Environment.Remove('WACU_QA_INPUT')
+    if ($case.Input) {
+        $start.Environment['WACU_QA_INPUT'] = '1'
+        $start.Environment['APPDATA'] = Join-Path $root 'target\qa-input-profile'
+    }
     $process = [System.Diagnostics.Process]::Start($start)
     if (!$process.WaitForExit(15000)) {
         $process.Kill()
@@ -47,9 +53,10 @@ foreach ($case in $cases) {
     if ($process.ExitCode -ne 0 -or !(Test-Path -LiteralPath $source)) {
         throw ('预览失败: ' + $case.Name + ' ' + $diagnostics)
     }
+    if ($case.Input -and $diagnostics -notmatch 'WACU_QA input_pass') { throw ('输入检查未通过: ' + $diagnostics) }
     $destination = Join-Path $root ('target\qa-' + $case.Name + '.png')
     Copy-Item -LiteralPath $source -Destination $destination -Force
-    if ($Archive) {
+    if ($Archive -and !$case.Input) {
         Copy-Item -LiteralPath $source -Destination (Join-Path $root ('docs\screenshots\' + $case.Name + '.png')) -Force
     }
     Write-Output ('已生成: ' + $case.Name)
