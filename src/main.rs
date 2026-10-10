@@ -1075,6 +1075,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             capsule.set_logo_dragging(std::env::var_os("WACU_QA_LOGO_DRAG").is_some());
             capsule
                 .set_preview_settings_pressed(std::env::var_os("WACU_QA_SETTINGS_PRESS").is_some());
+            capsule.set_preview_pressed_service(
+                std::env::var("WACU_QA_SERVICE_PRESS")
+                    .ok()
+                    .and_then(|value| value.parse::<i32>().ok())
+                    .unwrap_or(-1),
+            );
             let selected = std::env::var("WACU_QA_SELECTED")
                 .ok()
                 .and_then(|value| value.parse::<i32>().ok())

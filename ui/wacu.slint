@@ -35,8 +35,10 @@ component IconButton inherits Rectangle {
     callback activated();
     width: 32px * root.ui-scale; height: 32px * root.ui-scale;
     border-radius: root.circular ? min(root.width, root.height) / 2 : 8px * root.ui-scale;
-    background: hit.pressed || root.preview-pressed ? #35353b : (hit.has-hover ? Tokens.raised : transparent);
-    animate background { duration: root.animated ? 120ms : 0ms; easing: ease-out; }
+    background: hit.pressed || root.preview-pressed ? #2c3334 : (hit.has-hover ? #292e30 : transparent);
+    border-width: root.circular && (hit.pressed || root.preview-pressed) ? 1px : 0px;
+    border-color: #52615d;
+    animate background { duration: root.animated ? 110ms : 0ms; easing: ease-out; }
     Glyph { x: (parent.width - self.width) / 2; y: root.icon-top; width: root.icon-size; height: root.icon-size; source: root.icon; }
     hit := TouchArea { mouse-cursor: pointer; clicked => { root.activated(); } }
 }
@@ -46,6 +48,8 @@ component QuotaItem inherits Rectangle {
     in property <bool> selected: false;
     in property <bool> panel-on-left: false;
     in property <bool> animated: true;
+    in property <bool> preview-pressed: false;
+    property <bool> is-pressed: hit.pressed || root.preview-pressed;
     callback activated();
     in property <int> size-mode: 1;
     property <length> ring-width: root.size-mode == 0 ? 3px : (root.size-mode == 1 ? 4px : 5px);
@@ -53,21 +57,19 @@ component QuotaItem inherits Rectangle {
     width: root.size-mode == 0 ? 40px : (root.size-mode == 1 ? 56px : 72px);
     height: root.size-mode == 0 ? 52px : (root.size-mode == 1 ? 70px : 84px);
     border-radius: root.width / 2;
-    background: hit.has-hover ? #26262b : transparent;
-    opacity: hit.pressed ? 0.8 : 1;
-    animate background, opacity { duration: root.animated ? 100ms : 0ms; easing: ease-out; }
+    // Keep the item surface clear: feedback belongs to the circular meter, not an oval row.
+    background: transparent;
     Rectangle {
-        x: (parent.width - self.width) / 2; y: hit.pressed ? 1px : 0px;
-        width: (root.size-mode == 0 ? 36px : (root.size-mode == 1 ? 50px : 62px)) - (hit.pressed ? 2px : 0px);
+        x: (parent.width - self.width) / 2; y: 0px;
+        width: root.size-mode == 0 ? 36px : (root.size-mode == 1 ? 50px : 62px);
         height: self.width; border-radius: self.width / 2;
         background: transparent;
-        animate width, height, y { duration: root.animated ? 100ms : 0ms; easing: ease-out; }
         Image {
             width: parent.width * 66 / 50; height: self.width;
             x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
             source: root.service.glow; image-fit: contain; image-rendering: smooth;
-            opacity: root.selected ? 1 : 0.85;
-            animate opacity { duration: root.animated ? 150ms : 0ms; easing: ease-out; }
+            opacity: root.is-pressed ? 1 : (root.selected ? 0.94 : 0.82);
+            animate opacity { duration: root.animated ? 130ms : 0ms; easing: ease-out; }
         }
         Path {
             x: 2px; y: 2px; width: parent.width - 4px; height: parent.height - 4px;
@@ -77,32 +79,30 @@ component QuotaItem inherits Rectangle {
         }
         Path {
             x: 2px; y: 2px; width: parent.width - 4px; height: parent.height - 4px;
-            commands: root.service.arc; stroke: root.service.accent;
+            commands: root.service.arc;
+            stroke: root.is-pressed ? root.service.accent.brighter(7%) : root.service.accent;
             viewbox-width: 56; viewbox-height: 56;
             stroke-width: root.ring-width; stroke-line-cap: round; fill: transparent;
+            animate stroke { duration: root.animated ? 120ms : 0ms; easing: ease-out; }
         }
         Rectangle {
             x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2 + (hit.pressed ? 1px : (hit.has-hover ? -1px : 0px));
+            y: (parent.height - self.height) / 2;
             width: root.size-mode == 0 ? 20px : (root.size-mode == 1 ? 28px : 36px);
             height: self.width; border-radius: self.width / 2;
-            animate y { duration: root.animated ? 120ms : 0ms; easing: ease-out; }
-            background: root.service.source-index == 1 ? #ff7042 : root.service.accent;
+            background: root.service.source-index == 1 ? (root.is-pressed ? #f3764f : #ff7042) : (root.is-pressed ? root.service.accent.darker(8%) : root.service.accent);
+            animate background { duration: root.animated ? 120ms : 0ms; easing: ease-out; }
             drop-shadow-blur: root.selected ? 8px : 0px; drop-shadow-color: #3b82f666;
             Rectangle {
                 x: parent.width * 0.24; y: parent.height * 0.35;
-                width: parent.width * 0.17;
-                height: hit.pressed ? max(2px, self.width * 0.35) : self.width;
+                width: parent.width * 0.17; height: self.width;
                 border-radius: self.width / 2;
-                animate height { duration: root.animated ? 90ms : 0ms; easing: ease-out; }
                 background: root.service.source-index == 1 ? #fff9ef : #121215;
             }
             Rectangle {
                 x: parent.width * 0.60; y: parent.height * 0.35;
-                width: parent.width * 0.17;
-                height: hit.pressed ? max(2px, self.width * 0.35) : self.width;
+                width: parent.width * 0.17; height: self.width;
                 border-radius: self.width / 2;
-                animate height { duration: root.animated ? 90ms : 0ms; easing: ease-out; }
                 background: root.service.source-index == 1 ? #fff9ef : #121215;
             }
         }
@@ -144,6 +144,7 @@ export component CapsuleWindow inherits Window {
     in property <float> surface-opacity: 0.95;
     in-out property <bool> logo-dragging: false;
     in property <bool> preview-settings-pressed: false;
+    in property <int> preview-pressed-service: -1;
     callback open-service(int);
     callback open-settings();
     callback start-drag();
@@ -168,17 +169,17 @@ export component CapsuleWindow inherits Window {
                     Rectangle {
                         x: -2px; y: -2px; width: parent.width + 4px; height: parent.height + 4px;
                         border-radius: self.width / 2; background: #284b42;
-                        opacity: root.logo-dragging ? 0.52 : (logo-hit.has-hover ? 0.16 : 0);
-                        animate opacity { duration: root.animated ? 160ms : 0ms; easing: ease-out; }
+                        opacity: root.logo-dragging ? 0.22 : (logo-hit.has-hover ? 0.10 : 0);
+                        animate opacity { duration: root.animated ? 125ms : 0ms; easing: ease-out; }
                     }
                     Image {
-                        width: parent.width * (root.logo-dragging ? 0.91 : (logo-hit.has-hover ? 1.04 : 1));
+                        width: parent.width * (root.logo-dragging ? 0.97 : (logo-hit.has-hover ? 1.02 : 1));
                         height: self.width;
                         x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2 + (root.logo-dragging ? -1px : 0px);
+                        y: (parent.height - self.height) / 2;
                         source: root.size-mode == 0 ? @image-url("../assets/logo-compact.png") : (root.size-mode == 1 ? @image-url("../assets/logo-standard.png") : @image-url("../assets/logo-spacious.png"));
                         image-fit: contain; image-rendering: smooth;
-                        animate width, height, x, y { duration: root.animated ? 160ms : 0ms; easing: ease-out; }
+                        animate width, height, x, y { duration: root.animated ? 125ms : 0ms; easing: ease-out; }
                     }
                     logo-hit := TouchArea {
                         x: 0px; y: 0px; width: parent.width; height: parent.height; mouse-cursor: pointer;
@@ -198,6 +199,7 @@ export component CapsuleWindow inherits Window {
             }
             for service in root.services: QuotaItem {
                 service: service; size-mode: root.size-mode;
+                preview-pressed: root.preview-pressed-service == service.source-index;
                 selected: root.selected-index == service.source-index;
                 panel-on-left: root.panel-on-left; animated: root.animated;
                 activated => { root.open-service(service.source-index); }
