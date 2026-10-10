@@ -23,4 +23,4 @@ if ($process.ExitCode -ne 0 -or $diagnostics -notmatch 'WACU_QA position_pass') 
 $process.Dispose()
 $configAfter = if (Test-Path -LiteralPath $configPath) { (Get-FileHash -LiteralPath $configPath).Hash } else { $null }
 if ($configBefore -ne $configAfter) { throw '模式检查意外改变用户配置' }
-Write-Output '模式位置检查通过: 两种模式 Logo 输入、位置切换、贴边隐藏、左侧位置与保存；用户配置未改变'
+Write-Output '模式检查通过: Logo、三项服务、设置、拖动后的点击恢复、模式位置与保存；用户配置未改变'

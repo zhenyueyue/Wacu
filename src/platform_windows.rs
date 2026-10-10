@@ -129,6 +129,24 @@ pub fn begin_drag(window: &slint::Window) {
         ReleaseCapture();
         SendMessageW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION as usize, 0);
     }
+    release_drag_input(window);
+}
+
+pub fn release_drag_input(window: &slint::Window) {
+    use slint::platform::{PointerEventButton, WindowEvent};
+    let cursor = cursor();
+    let origin = window.position();
+    let scale = window.scale_factor();
+    let position = slint::LogicalPosition::new(
+        (cursor.x - origin.x) as f32 / scale,
+        (cursor.y - origin.y) as f32 / scale,
+    );
+    // The OS caption drag consumes mouse-up; release Slint's TouchArea grab too.
+    window.dispatch_event(WindowEvent::PointerReleased {
+        position,
+        button: PointerEventButton::Left,
+    });
+    window.dispatch_event(WindowEvent::PointerMoved { position });
 }
 
 fn wide(value: &str) -> Vec<u16> {

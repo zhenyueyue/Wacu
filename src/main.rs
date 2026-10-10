@@ -441,14 +441,21 @@ fn main() -> Result<(), Box<dyn Error>> {
         let active_drag = dragging.clone();
         let last_open = last_popup_open.clone();
         capsule.on_start_drag(move || {
-            if let Some(c) = weak.upgrade() {
-                preview.set(false);
-                active_drag.set(true);
-                platform_windows::begin_drag(c.window());
+            preview.set(false);
+            active_drag.set(true);
+            let cap = weak.clone();
+            let prefs = prefs.clone();
+            let active_drag = active_drag.clone();
+            let last_open = last_open.clone();
+            // Let Slint finish processing mouse-down before the OS drag loop.
+            Timer::single_shot(Duration::ZERO, move || {
+                if let Some(c) = cap.upgrade() {
+                    platform_windows::begin_drag(c.window());
+                    last_open.set(Instant::now());
+                    remember_position(&c, &prefs, None);
+                }
                 active_drag.set(false);
-                last_open.set(Instant::now());
-                remember_position(&c, &prefs, None);
-            }
+            });
         });
     }
     {
@@ -569,9 +576,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     {
         let weak = settings.as_weak();
         settings.on_start_settings_drag(move || {
-            if let Some(s) = weak.upgrade() {
-                platform_windows::begin_drag(s.window());
-            }
+            let weak = weak.clone();
+            Timer::single_shot(Duration::ZERO, move || {
+                if let Some(s) = weak.upgrade() {
+                    platform_windows::begin_drag(s.window());
+                }
+            });
         });
     }
     {
@@ -844,16 +854,51 @@ fn main() -> Result<(), Box<dyn Error>> {
             let tray = tray.as_weak();
             let origin = edge_origin.clone();
             let prefs = preferences.clone();
+            let detail = detail.as_weak();
             Timer::single_shot(Duration::from_millis(200), move || {
                 let c = cap.upgrade().unwrap();
                 let s = settings.upgrade().unwrap();
                 let t = tray.upgrade().unwrap();
+                let d = detail.upgrade().unwrap();
                 let drag_calls = Rc::new(Cell::new(0));
                 let calls = drag_calls.clone();
                 // Check real Logo hit-testing without entering the OS mouse drag loop.
                 c.on_start_drag(move || calls.set(calls.get() + 1));
                 qa_click(c.window(), 44.0, 48.0);
                 assert_eq!(drag_calls.get(), 1);
+                let check_clicks = || {
+                    let before = drag_calls.get();
+                    for (index, y) in [(1, 109.0), (0, 179.0), (2, 249.0)] {
+                        qa_click(c.window(), 44.0, y);
+                        assert_eq!(
+                            c.get_selected_index(),
+                            index,
+                            "Service click was intercepted"
+                        );
+                        assert!(d.window().is_visible());
+                        assert_eq!(d.get_selected_service().source_index, index);
+                        d.invoke_close_detail();
+                    }
+                    qa_click(c.window(), 44.0, 319.0);
+                    assert!(s.window().is_visible(), "Settings click was intercepted");
+                    s.invoke_close_settings();
+                    assert_eq!(drag_calls.get(), before, "A button click triggered drag");
+                };
+                let check_drag_release = || {
+                    use slint::platform::{PointerEventButton, WindowEvent};
+                    let position = slint::LogicalPosition::new(44.0, 48.0);
+                    c.window()
+                        .dispatch_event(WindowEvent::PointerMoved { position });
+                    c.window().dispatch_event(WindowEvent::PointerPressed {
+                        position,
+                        button: PointerEventButton::Left,
+                    });
+                    // Simulate the OS drag consuming mouse-up, then use the real recovery.
+                    platform_windows::release_drag_input(c.window());
+                    check_clicks();
+                };
+                check_clicks();
+                check_drag_release();
                 let size = capsule_dimensions(&c);
                 let current = c.window().position();
                 let area = platform_windows::work_area_at(Point {
@@ -878,8 +923,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                 s.invoke_set_pinned(false);
                 t.invoke_tray_clicked();
                 expect_position(custom);
+                let before = drag_calls.get();
                 qa_click(c.window(), 44.0, 48.0);
-                assert_eq!(drag_calls.get(), 2);
+                assert_eq!(drag_calls.get(), before + 1);
+                check_clicks();
+                check_drag_release();
                 s.invoke_set_pinned(true);
                 expect_position(custom);
                 // Switching while edge-hidden must retain the visible origin.
@@ -901,7 +949,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 assert_eq!(prefs.borrow().saved_position, Some((left.x, left.y)));
                 assert_eq!(state::load().saved_position, Some((left.x, left.y)));
                 eprintln!(
-                    "WACU_QA position_pass logo_input_both_modes, drag, popup, pinned, edge-hidden, dock-left, saved"
+                    "WACU_QA position_pass logo, services, settings, lost_mouse_up, popup, pinned, edge-hidden, dock-left, saved"
                 );
             });
         }
@@ -921,8 +969,51 @@ fn main() -> Result<(), Box<dyn Error>> {
             let s = settings.as_weak();
             Timer::single_shot(Duration::from_millis(300), move || {
                 if let Some(s) = s.upgrade() {
+                    // Exercise title mouse capture recovery without an OS modal drag.
+                    s.on_start_settings_drag(|| {});
+                    use slint::platform::{PointerEventButton, WindowEvent};
+                    let position = slint::LogicalPosition::new(120.0, 38.0);
+                    s.window()
+                        .dispatch_event(WindowEvent::PointerMoved { position });
+                    s.window().dispatch_event(WindowEvent::PointerPressed {
+                        position,
+                        button: PointerEventButton::Left,
+                    });
+                    platform_windows::release_drag_input(s.window());
                     qa_click(s.window(), 250.0, 330.0);
                 }
+            });
+            let s = settings.as_weak();
+            Timer::single_shot(Duration::from_millis(350), move || {
+                use slint::platform::{Key, PointerEventButton, WindowEvent};
+                let s = s.upgrade().unwrap();
+                let previous = s.get_opacity_percent();
+                let start = slint::LogicalPosition::new(250.0, 330.0);
+                let end = slint::LogicalPosition::new(300.0, 330.0);
+                s.window().dispatch_event(WindowEvent::PointerPressed {
+                    position: start,
+                    button: PointerEventButton::Left,
+                });
+                s.window()
+                    .dispatch_event(WindowEvent::PointerMoved { position: end });
+                s.window().dispatch_event(WindowEvent::PointerReleased {
+                    position: end,
+                    button: PointerEventButton::Left,
+                });
+                assert!(s.get_opacity_percent() > previous, "Slider drag failed");
+                qa_click(s.window(), 250.0, 330.0);
+                let previous = s.get_opacity_percent();
+                s.window().dispatch_event(WindowEvent::KeyPressed {
+                    text: Key::RightArrow.into(),
+                });
+                s.window().dispatch_event(WindowEvent::KeyReleased {
+                    text: Key::RightArrow.into(),
+                });
+                assert!(
+                    s.get_opacity_percent() > previous,
+                    "Slider keyboard focus failed"
+                );
+                qa_click(s.window(), 250.0, 330.0);
             });
             let s = settings.as_weak();
             Timer::single_shot(Duration::from_millis(400), move || {
