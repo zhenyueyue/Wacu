@@ -262,13 +262,18 @@ export component DetailWindow inherits Window {
     default-font-size: 16px;
     in property <Service> selected-service;
     in property <bool> animated: true;
+    in-out property <bool> revealed: false;
     in-out property <bool> expanded: false;
     in-out property <int> selected-period: 0;
     callback close-detail();
     callback expand-detail();
     callback open-dashboard();
     Rectangle {
-        x: (12px * Tokens.panel-scale); y: (12px * Tokens.panel-scale); width: parent.width - (24px * Tokens.panel-scale); height: parent.height - (24px * Tokens.panel-scale);
+        x: (root.revealed ? 12px : 18px) * Tokens.panel-scale;
+        y: (root.revealed ? 12px : 17px) * Tokens.panel-scale;
+        opacity: root.revealed ? 1 : 0;
+        animate x, y, opacity { duration: root.animated ? 175ms : 0ms; easing: ease-out; }
+        width: parent.width - (24px * Tokens.panel-scale); height: parent.height - (24px * Tokens.panel-scale);
         border-radius: (12px * Tokens.panel-scale); border-width: 1px; border-color: #333338;
         background: @linear-gradient(135deg, #292e30 0%, #1d2224 40%, #171b1d 100%);
         drop-shadow-blur: (16px * Tokens.panel-scale); drop-shadow-offset-y: (4px * Tokens.panel-scale); drop-shadow-color: #00000040;

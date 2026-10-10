@@ -256,15 +256,92 @@ fn position_detail(detail: &DetailWindow, capsule: &CapsuleWindow) {
         .set_position(PhysicalPosition::new(dest.x, dest.y));
 }
 
-// Windows' native caption-move loop blocks Slint UI timers. Hide the separate
-// detail panel before entering that loop; after mouse-up, anchor it at the new
-// capsule location before making it visible again.
-fn restore_detail_after_drag(detail: &DetailWindow, capsule: &CapsuleWindow) {
-    position_detail(detail, capsule);
-    let _ = detail.show();
+const DETAIL_FADE: Duration = Duration::from_millis(175);
+
+#[derive(Clone, Default)]
+struct DetailMotion {
+    generation: Rc<Cell<u64>>,
+    closing: Rc<Cell<bool>>,
 }
 
-fn show_detail(detail: &DetailWindow, capsule: &CapsuleWindow, index: usize, prefs: &Preferences) {
+impl DetailMotion {
+    fn next(&self) -> u64 {
+        let generation = self.generation.get().wrapping_add(1);
+        self.generation.set(generation);
+        generation
+    }
+}
+
+// Drive the actual panel opacity/position properties, not just its child controls.
+// The first frame must be drawn hidden before changing the revealed property.
+fn reveal_detail_window(detail: &DetailWindow, motion: &DetailMotion) {
+    let generation = motion.next();
+    motion.closing.set(false);
+    if detail.window().is_visible() {
+        detail.set_revealed(true);
+        return;
+    }
+    detail.set_revealed(false);
+    let _ = detail.show();
+    if !detail.get_animated() {
+        detail.set_revealed(true);
+        return;
+    }
+    let weak = detail.as_weak();
+    let motion = motion.clone();
+    Timer::single_shot(Duration::from_millis(20), move || {
+        if motion.generation.get() == generation {
+            if let Some(detail) = weak.upgrade() {
+                if detail.window().is_visible() {
+                    detail.set_revealed(true);
+                }
+            }
+        }
+    });
+}
+
+fn dismiss_detail(detail: &DetailWindow, motion: &DetailMotion) {
+    if !detail.window().is_visible() || motion.closing.get() {
+        return;
+    }
+    let generation = motion.next();
+    motion.closing.set(true);
+    detail.set_revealed(false);
+    if !detail.get_animated() {
+        let _ = detail.hide();
+        motion.closing.set(false);
+        return;
+    }
+    let weak = detail.as_weak();
+    let motion = motion.clone();
+    Timer::single_shot(DETAIL_FADE + Duration::from_millis(10), move || {
+        if motion.generation.get() == generation {
+            if let Some(detail) = weak.upgrade() {
+                let _ = detail.hide();
+            }
+            motion.closing.set(false);
+        }
+    });
+}
+
+// Native Windows dragging blocks normal Slint timers. Keep the established
+// immediate hide on mouse-down; after mouse-up, re-anchor and fade back in.
+fn restore_detail_after_drag(
+    detail: &DetailWindow,
+    capsule: &CapsuleWindow,
+    motion: &DetailMotion,
+) {
+    position_detail(detail, capsule);
+    reveal_detail_window(detail, motion);
+}
+
+fn show_detail(
+    detail: &DetailWindow,
+    capsule: &CapsuleWindow,
+    index: usize,
+    prefs: &Preferences,
+    motion: &DetailMotion,
+) {
     if !prefs.shown[index] {
         return;
     }
@@ -273,7 +350,7 @@ fn show_detail(detail: &DetailWindow, capsule: &CapsuleWindow, index: usize, pre
     capsule.set_selected_index(index as i32);
     detail.set_expanded(false);
     detail.set_selected_period(0);
-    let _ = detail.show();
+    reveal_detail_window(detail, motion);
     position_detail(detail, capsule);
     let weak = detail.as_weak();
     Timer::single_shot(Duration::from_millis(30), move || {
@@ -282,6 +359,18 @@ fn show_detail(detail: &DetailWindow, capsule: &CapsuleWindow, index: usize, pre
             platform_windows::activate(view.window());
         }
     });
+}
+
+#[cfg(debug_assertions)]
+fn qa_detail_opacity(window: &slint::Window) -> u8 {
+    let snapshot = window
+        .take_snapshot()
+        .expect("Cannot capture animated detail");
+    let width = snapshot.width() as usize;
+    let height = snapshot.height() as usize;
+    // Transparent root window, with an opaque center panel at full reveal.
+    let alpha_offset = ((height / 2) * width + width / 2) * 4 + 3;
+    snapshot.as_bytes()[alpha_offset]
 }
 
 #[cfg(debug_assertions)]
@@ -362,6 +451,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let last_popup_open = Rc::new(Cell::new(Instant::now() - Duration::from_secs(3)));
     let startup_preview = Rc::new(Cell::new(false));
     let dragging = Rc::new(Cell::new(false));
+    let detail_motion = DetailMotion::default();
 
     let capsule = CapsuleWindow::new()?;
     let settings = SettingsWindow::new()?;
@@ -448,6 +538,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let active_drag = dragging.clone();
         let last_open = last_popup_open.clone();
         let detail_weak = detail.as_weak();
+        let motion = detail_motion.clone();
         capsule.on_start_drag(move || {
             preview.set(false);
             active_drag.set(true);
@@ -459,14 +550,16 @@ fn main() -> Result<(), Box<dyn Error>> {
             let active_drag = active_drag.clone();
             let last_open = last_open.clone();
             let detail_weak = detail_weak.clone();
-            // Immediately hide an open detail so it never remains in the old spot.
-            let restore_detail = detail_weak
-                .upgrade()
-                .is_some_and(|d| d.window().is_visible());
-            if restore_detail {
-                if let Some(d) = detail_weak.upgrade() {
-                    let _ = d.hide();
-                }
+            let motion = motion.clone();
+            // Dragging always hides the detail instantly, including while an
+            // earlier fade-out is still running. Restore only an open detail.
+            let visible_detail = detail_weak.upgrade().filter(|d| d.window().is_visible());
+            let restore_detail = visible_detail.is_some() && !motion.closing.get();
+            if let Some(d) = visible_detail {
+                motion.next(); // invalidate a pending reveal or dismiss timer
+                motion.closing.set(false);
+                d.set_revealed(false);
+                let _ = d.hide();
             }
             // Allow the avatar's pressed state one frame before the native drag.
             Timer::single_shot(Duration::from_millis(35), move || {
@@ -478,7 +571,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     c.set_logo_dragging(false);
                     if restore_detail {
                         if let Some(d) = detail_weak.upgrade() {
-                            restore_detail_after_drag(&d, &c);
+                            restore_detail_after_drag(&d, &c, &motion);
                         }
                     }
                 }
@@ -491,12 +584,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         let view = detail.as_weak();
         let pref = preferences.clone();
         let preview = startup_preview.clone();
+        let motion = detail_motion.clone();
         capsule.on_open_service(move |idx| {
             preview.set(false);
             if let (Some(c), Some(d)) = (cap.upgrade(), view.upgrade()) {
                 if let Ok(index) = usize::try_from(idx) {
                     if index < 3 {
-                        show_detail(&d, &c, index, &pref.borrow());
+                        show_detail(&d, &c, index, &pref.borrow(), &motion);
                     }
                 }
             }
@@ -505,9 +599,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     {
         let weak = detail.as_weak();
         let cap = capsule.as_weak();
+        let motion = detail_motion.clone();
         detail.on_close_detail(move || {
             if let Some(d) = weak.upgrade() {
-                let _ = d.hide();
+                dismiss_detail(&d, &motion);
             }
             if let Some(c) = cap.upgrade() {
                 c.set_selected_index(-1);
@@ -1113,10 +1208,82 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         match qa_view.as_str() {
             "quick" | "detail" => {
-                show_detail(&detail, &capsule, 1, &initial);
+                show_detail(&detail, &capsule, 1, &initial, &detail_motion);
+                if std::env::var_os("WACU_QA_DETAIL_FADE").is_some() {
+                    let fading = detail.as_weak();
+                    Timer::single_shot(Duration::from_millis(85), move || {
+                        let d = fading.upgrade().unwrap();
+                        let mid = qa_detail_opacity(d.window());
+                        let fading = d.as_weak();
+                        Timer::single_shot(Duration::from_millis(145), move || {
+                            let d = fading.upgrade().unwrap();
+                            let full = qa_detail_opacity(d.window());
+                            assert!(
+                                full > mid.saturating_add(10),
+                                "Detail opacity must visibly animate; mid={mid} full={full}"
+                            );
+                            eprintln!("WACU_QA detail_alpha_pass mid={mid} full={full}");
+                        });
+                    });
+                    let cap = capsule.as_weak();
+                    let det = detail.as_weak();
+                    let motion = detail_motion.clone();
+                    let prefs = initial.clone();
+                    Timer::single_shot(Duration::from_millis(240), move || {
+                        let c = cap.upgrade().unwrap();
+                        let d = det.upgrade().unwrap();
+                        assert!(d.window().is_visible() && d.get_revealed());
+                        dismiss_detail(&d, &motion);
+                        assert!(d.window().is_visible() && !d.get_revealed());
+                        let cap = c.as_weak();
+                        let det = d.as_weak();
+                        let motion = motion.clone();
+                        Timer::single_shot(Duration::from_millis(40), move || {
+                            let c = cap.upgrade().unwrap();
+                            let d = det.upgrade().unwrap();
+                            show_detail(&d, &c, 1, &prefs, &motion);
+                            assert!(d.window().is_visible() && d.get_revealed());
+                            let cap = c.as_weak();
+                            let det = d.as_weak();
+                            let motion = motion.clone();
+                            Timer::single_shot(Duration::from_millis(100), move || {
+                                let c = cap.upgrade().unwrap();
+                                let d = det.upgrade().unwrap();
+                                assert!(
+                                    d.window().is_visible(),
+                                    "Old close timer hid reopened detail"
+                                );
+                                dismiss_detail(&d, &motion);
+                                let cap = c.as_weak();
+                                let det = d.as_weak();
+                                let motion = motion.clone();
+                                Timer::single_shot(Duration::from_millis(205), move || {
+                                    let c = cap.upgrade().unwrap();
+                                    let d = det.upgrade().unwrap();
+                                    assert!(
+                                        !d.window().is_visible(),
+                                        "Fade-out failed to hide the detail"
+                                    );
+                                    d.set_animated(false);
+                                    reveal_detail_window(&d, &motion);
+                                    assert!(d.window().is_visible() && d.get_revealed());
+                                    dismiss_detail(&d, &motion);
+                                    assert!(
+                                        !d.window().is_visible(),
+                                        "Disabled animations should close immediately"
+                                    );
+                                    d.set_animated(true);
+                                    show_detail(&d, &c, 1, &prefs, &motion);
+                                    eprintln!("WACU_QA detail_fade_pass");
+                                });
+                            });
+                        });
+                    });
+                }
                 if std::env::var_os("WACU_QA_DRAG_DETAIL").is_some() {
                     let cap = capsule.as_weak();
                     let det = detail.as_weak();
+                    let motion = detail_motion.clone();
                     Timer::single_shot(Duration::from_millis(280), move || {
                         let c = cap.upgrade().unwrap();
                         let d = det.upgrade().unwrap();
@@ -1147,7 +1314,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         );
                         c.window()
                             .set_position(PhysicalPosition::new(target.x, target.y));
-                        restore_detail_after_drag(&d, &c);
+                        restore_detail_after_drag(&d, &c, &motion);
                         assert!(
                             d.window().is_visible(),
                             "Detail should reopen after mouse-up"
@@ -1251,6 +1418,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let details = detail.as_weak();
         let prefs = preferences.clone();
         let popup_open = last_popup_open.clone();
+        let motion = detail_motion.clone();
         let preview = startup_preview.clone();
         let active_drag = dragging.clone();
         let last_pos = Rc::new(RefCell::new(None::<(i32, i32)>));
@@ -1274,12 +1442,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                     && (platform_windows::is_foreground(d.window())
                         || platform_windows::cursor_is_over(d.window()));
                 if d.window().is_visible()
+                    && !motion.closing.get()
+                    && d.get_revealed()
                     && !platform_windows::is_foreground(d.window())
                     && !platform_windows::is_foreground(c.window())
                     && !platform_windows::cursor_is_over(d.window())
                     && !platform_windows::cursor_is_over(c.window())
                 {
-                    let _ = d.hide();
+                    dismiss_detail(&d, &motion);
                     c.set_selected_index(-1);
                 }
             }
