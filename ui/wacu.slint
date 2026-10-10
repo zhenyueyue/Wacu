@@ -64,7 +64,7 @@ component QuotaItem inherits Rectangle {
             x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
             width: root.size-mode == 0 ? 20px : (root.size-mode == 1 ? 28px : 36px);
             height: self.width; border-radius: self.width / 2;
-            background: @linear-gradient(130deg, root.service.accent.brighter(8%) 0%, (root.service.source-index == 1 ? #ff7042 : root.service.accent) 100%);
+            background: root.service.source-index == 1 ? #ff7042 : root.service.accent;
             drop-shadow-blur: root.selected ? 8px : 0px; drop-shadow-color: #3b82f666;
             Rectangle {
                 x: parent.width * 0.24; y: parent.height * 0.35;
@@ -119,8 +119,8 @@ export component CapsuleWindow inherits Window {
     Rectangle {
         x: 12px; y: root.revealed ? 12px : 18px;
         width: parent.width - 24px; height: parent.height - 24px;
-        border-radius: self.width / 2; border-width: 1px; border-color: root.selected-index >= 0 ? #3b82f6 : #45494a;
-        background: @linear-gradient(100deg, #303334 0%, #202324 20%, #121516 65%, #191c1d 100%);
+        border-radius: root.size-mode == 0 ? 20px : (root.size-mode == 1 ? 24px : 28px); border-width: 1px; border-color: root.selected-index >= 0 ? #3b82f6 : #45494a;
+        background: #1b1c1f;
         opacity: root.revealed ? root.surface-opacity : 0;
         drop-shadow-blur: 14px; drop-shadow-offset-y: 4px; drop-shadow-color: root.selected-index >= 0 ? #3b82f633 : #00000050;
         animate y, opacity { duration: root.animated ? 200ms : 0ms; easing: ease-out; }
