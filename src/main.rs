@@ -16,7 +16,7 @@ use placement::{Point, constrain, docked, edge_position, pinned};
 use slint::{
     ComponentHandle, Model, ModelRc, PhysicalPosition, SharedString, Timer, TimerMode, VecModel,
 };
-use state::{Mode, Preferences};
+use state::{EntryView, Mode, Preferences};
 
 slint::include_modules!();
 
@@ -121,6 +121,27 @@ fn place_capsule(capsule: &CapsuleWindow, prefs: &Preferences) {
         .set_position(PhysicalPosition::new(position.x, position.y));
 }
 
+fn persist_entry_preferences() -> bool {
+    #[cfg(debug_assertions)]
+    if std::env::var_os("WACU_QA_VIEW").is_some() {
+        return std::env::var_os("WACU_QA_ENTRY_SESSION").is_some();
+    }
+    true
+}
+
+fn remember_entry_view(prefs: &Rc<RefCell<Preferences>>, entry_view: EntryView) {
+    let mut value = prefs.borrow_mut();
+    if value.entry_view == entry_view {
+        return;
+    }
+    value.entry_view = entry_view;
+    if persist_entry_preferences() {
+        if let Err(error) = state::save(&value) {
+            eprintln!("Saving entry view: {error}");
+        }
+    }
+}
+
 fn remember_position(
     capsule: &CapsuleWindow,
     prefs: &Rc<RefCell<Preferences>>,
@@ -140,8 +161,7 @@ fn remember_position(
     }
     value.saved_position = Some((point.x, point.y));
     // Visual previews update only their in-memory preferences.
-    #[cfg(debug_assertions)]
-    if std::env::var_os("WACU_QA_VIEW").is_some() {
+    if !persist_entry_preferences() {
         return;
     }
     if let Err(error) = state::save(&value) {
@@ -185,8 +205,7 @@ fn remember_mini(mini: &MiniWindow, prefs: &Rc<RefCell<Preferences>>) {
         return;
     }
     value.mini_position = Some((pos.x, pos.y));
-    #[cfg(debug_assertions)]
-    if std::env::var_os("WACU_QA_VIEW").is_some() {
+    if !persist_entry_preferences() {
         return;
     }
     if let Err(error) = state::save(&value) {
@@ -256,6 +275,7 @@ fn expand_entry(
     let generation = motion.next();
     let pos = mini.window().position();
     remember_mini(mini, prefs);
+    remember_entry_view(prefs, EntryView::Capsule);
     mini.set_revealed(false);
     let already_visible = capsule.window().is_visible();
     let _ = capsule.show();
@@ -267,6 +287,7 @@ fn expand_entry(
     capsule
         .window()
         .set_position(PhysicalPosition::new(target.x, target.y));
+    remember_position(capsule, prefs, None);
     if !capsule.get_animated() {
         let _ = mini.hide();
         platform_windows::configure_capsule(capsule.window());
@@ -307,6 +328,7 @@ fn collapse_entry(
     motion: &EntryMotion,
 ) {
     remember_position(capsule, prefs, None);
+    remember_entry_view(prefs, EntryView::Mini);
     capsule.set_revealed(false);
     show_mini(mini, prefs, motion);
     let generation = motion.0.get();
@@ -356,6 +378,37 @@ fn show_entry_menu(menu: &EntryMenuWindow, owner: &slint::Window, x: f32, y: f32
     platform_windows::configure_capsule(menu.window());
     platform_windows::activate(menu.window());
     menu.invoke_focus_menu();
+}
+
+fn restore_entry(
+    mini: &MiniWindow,
+    capsule: &CapsuleWindow,
+    prefs: &Rc<RefCell<Preferences>>,
+    motion: &EntryMotion,
+) {
+    if prefs.borrow().entry_view == EntryView::Mini {
+        show_mini(mini, prefs, motion);
+        return;
+    }
+    capsule.set_revealed(false);
+    let _ = capsule.show();
+    let target = capsule_position(
+        &prefs.borrow(),
+        capsule_dimensions(capsule),
+        platform_windows::cursor(),
+    );
+    capsule
+        .window()
+        .set_position(PhysicalPosition::new(target.x, target.y));
+    remember_position(capsule, prefs, None);
+    let weak = capsule.as_weak();
+    Timer::single_shot(Duration::from_millis(16), move || {
+        if let Some(c) = weak.upgrade() {
+            platform_windows::configure_capsule(c.window());
+            platform_windows::activate(c.window());
+            c.set_revealed(true);
+        }
+    });
 }
 
 fn show_capsule(capsule: &CapsuleWindow, prefs: &Rc<RefCell<Preferences>>) {
@@ -414,6 +467,7 @@ fn set_mode(
     capsule: &CapsuleWindow,
     settings: &SettingsWindow,
     edge_origin: &Cell<Option<Point>>,
+    desktop_entry: bool,
 ) {
     remember_position(capsule, prefs, edge_origin.take());
     {
@@ -425,6 +479,9 @@ fn set_mode(
     }
     let current = prefs.borrow().clone();
     refresh_model(model, capsule, settings, &current);
+    if desktop_entry {
+        return;
+    }
     match mode {
         Mode::Popup => {
             capsule.set_revealed(false);
@@ -946,12 +1003,28 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mini_active = true;
     #[cfg(debug_assertions)]
     let mini_active = std::env::var("WACU_QA_VIEW")
-        .map(|view| view.is_empty() || view == "mini")
+        .map(|view| view.is_empty() || view == "mini" || view == "entry-session")
         .unwrap_or(true);
     #[cfg(debug_assertions)]
     let mut initial = initial;
     #[cfg(debug_assertions)]
     let qa_view = std::env::var("WACU_QA_VIEW").unwrap_or_default();
+    #[cfg(debug_assertions)]
+    if std::env::var_os("WACU_QA_ENTRY_SESSION").is_some() {
+        let expected = std::env::current_dir()?.join("target/qa-entry-session-profile");
+        let actual = std::env::var("APPDATA")
+            .unwrap_or_default()
+            .replace('/', "\\");
+        if qa_view != "entry-session"
+            || !actual.eq_ignore_ascii_case(&expected.to_string_lossy().replace('/', "\\"))
+        {
+            return Err("Entry session QA requires an isolated APPDATA".into());
+        }
+    }
+    #[cfg(debug_assertions)]
+    if qa_view == "mini" {
+        initial.entry_view = EntryView::Mini;
+    }
     #[cfg(debug_assertions)]
     if qa_view == "menu" {
         let preview = EntryMenuWindow::new()?;
@@ -1117,7 +1190,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         });
     }
 
-    // Desktop Mini is the sole launcher; the shared menu is shown on demand
+    // Restore the last desktop entry; the shared menu is shown on demand
     // in the same process, without background threads or Explorer integration.
     {
         let mini_weak = mini.as_weak();
@@ -1229,7 +1302,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         } else {
                             Mode::Popup
                         };
-                        set_mode(next, &pref, &model, &c, &s, &origin);
+                        set_mode(next, &pref, &model, &c, &s, &origin, false);
                     }
                 }
             });
@@ -1385,6 +1458,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     &c,
                     &s,
                     &origin,
+                    mini_active,
                 );
             }
         });
@@ -1728,7 +1802,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     #[cfg(debug_assertions)]
     let show_tray = !matches!(
         qa_view.as_str(),
-        "capsule" | "quick" | "detail" | "settings"
+        "capsule" | "quick" | "detail" | "settings" | "entry-session"
     );
     if show_tray {
         if let Some(tray) = tray.as_ref() {
@@ -1738,7 +1812,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     startup_preview.set(!mini_active && initial.mode == Mode::Popup);
     last_popup_open.set(Instant::now());
     if mini_active {
-        show_mini(&mini, &preferences, &entry_motion);
+        restore_entry(&mini, &capsule, &preferences, &entry_motion);
     } else {
         show_capsule(&capsule, &preferences);
     }
@@ -1746,6 +1820,75 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Debug-only visual QA; does not exist in the Release application.
     #[cfg(debug_assertions)]
     if !qa_view.is_empty() {
+        if let Ok(action) = std::env::var("WACU_QA_ENTRY_SESSION") {
+            let expected = match std::env::var("WACU_QA_ENTRY_EXPECT").as_deref() {
+                Ok("mini") => EntryView::Mini,
+                Ok("capsule") => EntryView::Capsule,
+                _ => return Err("Entry session QA requires an expected view".into()),
+            };
+            let m = mini.as_weak();
+            let c = capsule.as_weak();
+            let s = settings.as_weak();
+            let menu = menu.as_weak();
+            let prefs = preferences.clone();
+            let delay = if action == "verify-settings" {
+                3700
+            } else {
+                350
+            };
+            Timer::single_shot(Duration::from_millis(delay), move || {
+                let m = m.upgrade().unwrap();
+                let c = c.upgrade().unwrap();
+                let s = s.upgrade().unwrap();
+                let menu = menu.upgrade().unwrap();
+                assert_eq!(prefs.borrow().entry_view, expected);
+                assert_eq!(m.window().is_visible(), expected == EntryView::Mini);
+                assert_eq!(c.window().is_visible(), expected == EntryView::Capsule);
+                if expected == EntryView::Mini {
+                    assert!(m.get_revealed());
+                    let p = m.window().position();
+                    assert_eq!(prefs.borrow().mini_position, Some((p.x, p.y)));
+                } else {
+                    assert!(c.get_revealed());
+                    let p = c.window().position();
+                    assert_eq!(prefs.borrow().saved_position, Some((p.x, p.y)));
+                }
+                match action.as_str() {
+                    "verify" => {}
+                    "verify-settings" => {
+                        show_settings(&s);
+                        assert!(s.window().is_visible());
+                        s.invoke_set_pinned(true);
+                        s.invoke_set_pinned(false);
+                        assert_eq!(prefs.borrow().entry_view, expected);
+                        assert_eq!(m.window().is_visible(), expected == EntryView::Mini);
+                        assert_eq!(c.window().is_visible(), expected == EntryView::Capsule);
+                    }
+                    "expand" => m.invoke_toggle_expanded(),
+                    "collapse" => c.invoke_collapse_to_mini(),
+                    "rapid-capsule" => {
+                        m.invoke_toggle_expanded();
+                        c.invoke_collapse_to_mini();
+                        m.invoke_toggle_expanded();
+                    }
+                    "rapid-mini" => {
+                        c.invoke_collapse_to_mini();
+                        m.invoke_toggle_expanded();
+                        c.invoke_collapse_to_mini();
+                    }
+                    _ => panic!("Unknown entry session QA action"),
+                }
+                eprintln!(
+                    "WACU_QA entry_session_pass initial={expected:?} action={action} target={:?}",
+                    prefs.borrow().entry_view
+                );
+                if action == "collapse" || action == "verify-settings" {
+                    s.invoke_exit_app();
+                } else {
+                    menu.invoke_exit_app();
+                }
+            });
+        }
         if std::env::var_os("WACU_QA_STARTUP").is_some() {
             let weak = capsule.as_weak();
             Timer::single_shot(Duration::from_millis(300), move || {
@@ -2530,6 +2673,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         });
     }
     slint::run_event_loop()?;
+    if mini_active && persist_entry_preferences() {
+        // Use the logical view saved at the start of a switch: both native
+        // windows can still be visible when quitting during the animation.
+        if mini.window().is_visible() {
+            remember_mini(&mini, &preferences);
+        }
+        remember_position(&capsule, &preferences, edge_origin.get());
+        if let Err(error) = state::save(&preferences.borrow()) {
+            eprintln!("Saving entry session: {error}");
+        }
+    }
     Ok(())
 }
 

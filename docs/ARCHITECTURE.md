@@ -24,17 +24,20 @@ src/state.rs                # 模式、位置和启用服务的 JSON 持久化
 scripts/capture-ui.ps1      # 隔离配置的原生界面快照检查
 scripts/check-position.ps1  # 隔离配置的两种模式共享位置检查
 scripts/check-startup.ps1   # 弹出／常驻启动显隐检查
+scripts/check-entry-session.ps1 # 正式入口形态与位置的退出重启检查
 ```
 
 ## 窗口
 
-- **MiniWindow / CapsuleWindow**：正式版启动显示 Mini，左键头像即时展开／收起；透明背景、无边框、置顶。二者独立保存位置，超过 7px 才开始原生拖动。
+- **MiniWindow / CapsuleWindow**：首次启动显示 Mini，之后恢复退出时的形态；左键头像即时展开／收起，透明背景、无边框、置顶。二者独立保存位置，超过 7px 才开始原生拖动。
 - **DetailWindow**：点选某项时弹出，显示多个额度说明及真实接入的预留状态。
 - **SettingsWindow**：常规／服务管理／外观／行为／关于，深色 Fluent 下拉框和滑杆。
 - **EntryMenuWindow**：Mini 和胶囊共用的 128×84px 深色图标菜单窗口，只有设置和退出两项。右键位置转换为屏幕坐标后限制在工作区内，失焦与 Esc 关闭；隐藏时不绘制。使用独立窗口避免小尺寸入口裁切菜单。
 - **WacuTray**：仅用于 Debug 旧模式检查，正式版不创建。
 
 ## 使用状态
+
+`entry_view` 独立于旧版 `mode`，取值 `mini` / `capsule`，旧配置缺失时默认 Mini。切换开始时记录目标形态，避免交接动画期间两窗同时可见导致退出状态歧义；退出事件循环后再次保存形态和可见窗口的正常坐标。启动直接显示保存的入口，不先显示 Mini 再展开。设置、详情、菜单不会改变该形态，设置常驻选项在正式入口模式下也不切换窗口显隐。恢复的胶囊不会沿用旧托盘模式的三秒自动隐藏。
 
 用户设置文件保存在 `%APPDATA%/Wacu/preferences.json`，修改时使用先写临时文件再原子替换的策略。仓库中不保存 API Key、Token 或用户资料。
 

@@ -6,7 +6,7 @@ Windows 轻量 AI 用量守望工具。**现已完全重写为 Rust + Slint + Wi
 
 ## 界面
 
-- **桌面 Mini 悬浮图标是唯一正式入口**：启动后显示约 66×66px 圆形图标，左键 Mini 立即展开纵向胶囊；左键胶囊顶部头像立即收回 Mini，不使用系统托盘图标。
+- **桌面 Mini / 纵向胶囊为正式入口**：首次启动显示约 66×66px 圆形 Mini；之后启动恢复退出时的形态与各自位置。左键 Mini 立即展开纵向胶囊，左键胶囊顶部头像立即收回 Mini，不使用系统托盘图标。
 - 已移除双击操作和单双击等待。右键 Mini 或胶囊弹出紧凑深色圆角菜单：齿轮图标“设置”、电源图标“退出”，无图标底块，轻柔阴影和灰色悬停高亮；菜单外点击或 Esc 可取消。鼠标移动超过 7px 才开始原生拖动，拖动不会误触切换。查看[菜单预览](docs/screenshots/context-menu-hover.png)。
 - EXE 与原生窗口统一使用品牌 Logo；程序内嵌 16–256px 多尺寸 Windows 图标。
 - 胶囊顶部显示品牌 Logo，下方排列 Claude Code、Codex、WorkBuddy，以双眼角色、带背景轨道的进度环和已用百分比显示演示用量；**已移除底部设置齿轮及其空白**。默认标准档主体宽 72px、圆环 56px；外观页可选择紧凑／标准／宽松三档（窗口宽分别为 88／96／104px）并记住偏好，旧标准升级后自动对应新的紧凑档。
@@ -38,6 +38,7 @@ cargo test
 ```powershell
 cargo build
 ./scripts/check-entry-motion.ps1
+./scripts/check-entry-session.ps1 # 实际退出重启，检查窗口形态及独立位置恢复
 ```
 
 生成优化后的 Windows 可执行程序：

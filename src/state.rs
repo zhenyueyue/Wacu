@@ -8,10 +8,19 @@ pub enum Mode {
     Pinned,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EntryView {
+    #[default]
+    Mini,
+    Capsule,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
     pub mode: Mode,
+    pub entry_view: EntryView,
     pub saved_position: Option<(i32, i32)>,
     pub mini_position: Option<(i32, i32)>,
     pub shown: [bool; 3],
@@ -51,6 +60,7 @@ impl Default for Preferences {
     fn default() -> Self {
         Self {
             mode: Mode::Popup,
+            entry_view: EntryView::Mini,
             saved_position: None,
             mini_position: None,
             shown: [true; 3],
@@ -99,6 +109,7 @@ mod tests {
     fn preferences_backward_compatible() {
         let prefs: Preferences = serde_json::from_str(r#"{"mode":"popup"}"#).unwrap();
         assert_eq!(prefs.mode, Mode::Popup);
+        assert_eq!(prefs.entry_view, EntryView::Mini);
         assert_eq!(prefs.shown, [true; 3]);
         assert!(prefs.animations_enabled);
         assert_eq!(prefs.opacity_percent, 95);
@@ -106,6 +117,23 @@ mod tests {
         assert_eq!(prefs.size_preset_version, 1);
         assert!(!prefs.edge_hide);
         assert!(!prefs.dock_left);
+    }
+
+    #[test]
+    fn entry_view_round_trip_preserves_independent_positions() {
+        for entry_view in [EntryView::Mini, EntryView::Capsule] {
+            let prefs = Preferences {
+                entry_view,
+                mini_position: Some((100, 200)),
+                saved_position: Some((300, 400)),
+                ..Preferences::default()
+            };
+            let restored: Preferences =
+                serde_json::from_str(&serde_json::to_string(&prefs).unwrap()).unwrap();
+            assert_eq!(restored.entry_view, entry_view);
+            assert_eq!(restored.mini_position, prefs.mini_position);
+            assert_eq!(restored.saved_position, prefs.saved_position);
+        }
     }
 
     #[test]
