@@ -27,7 +27,10 @@ foreach ($size in $Sizes) {
         }
         $process.Dispose()
         if ($Archive -and $size -eq 1 -and $count -eq 3) {
-            foreach ($frame in @('mini-rest', 'mini-exit', 'open-early', 'open-mid', 'open-rest', 'open-settled', 'close-early', 'close-mid', 'mini-return-early', 'mini-return-mid', 'mini-return-rest', 'open-fx-40', 'open-fx-60', 'open-fx-100', 'open-fx-120', 'open-fx-160', 'open-fx-200', 'open-fx-260', 'open-fx-300', 'close-fx-20', 'close-fx-50', 'close-fx-110', 'close-fx-130')) {
+            foreach ($frame in @('mini-rest', 'mini-exit', 'open-early', 'open-mid', 'open-rest', 'open-settled', 'close-early', 'close-mid', 'mini-return-early', 'mini-return-mid', 'mini-return-rest', 'open-fx-40', 'open-fx-60', 'open-fx-100', 'open-fx-120', 'open-fx-160', 'open-fx-200', 'open-fx-260', 'open-fx-300', 'close-fx-20', 'close-fx-50', 'close-fx-110', 'close-fx-130', 'close-fx-170')) {
+                Copy-Item -LiteralPath (Join-Path $taskRoot "target\qa-entry-$frame.png") -Destination (Join-Path $taskRoot "docs\screenshots\entry-$frame.png") -Force
+            }
+            foreach ($frame in @('mini-exit-40', 'mini-exit-60', 'mini-exit-100', 'mini-return-20', 'mini-return-50', 'mini-return-110', 'mini-return-130', 'mini-return-170')) {
                 Copy-Item -LiteralPath (Join-Path $taskRoot "target\qa-entry-$frame.png") -Destination (Join-Path $taskRoot "docs\screenshots\entry-$frame.png") -Force
             }
         }

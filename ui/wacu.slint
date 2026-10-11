@@ -44,10 +44,28 @@ component IconButton inherits Rectangle {
     hit := TouchArea { enabled: root.interactive; mouse-cursor: pointer; clicked => { root.activated(); } }
 }
 
+component RelayRing inherits Rectangle {
+    in property <[Service]> services;
+    in property <float> strength: 0;
+    in property <float> turn: 0;
+    pure callback render-trail(float, float) -> string;
+    background: transparent;
+    for service[index] in root.services: Path {
+        x: 2px; y: 2px; width: parent.width - 4px; height: parent.height - 4px;
+        viewbox-width: 56; viewbox-height: 56;
+        commands: root.strength > 0 ? root.render-trail(index * 100.0 / max(1, root.services.length) + root.turn * 12, 16) : "";
+        stroke: service.accent; stroke-width: 1.8px; stroke-line-cap: round; fill: transparent;
+        opacity: root.strength;
+    }
+}
+
 component QuotaItem inherits Rectangle {
     in property <Service> service;
     in property <float> transition: 1;
+    in property <float> spread: 1;
+    in property <float> highlight: 0;
     pure callback render-arc(float) -> string;
+    pure callback render-trail(float, float) -> string;
     in property <bool> selected: false;
     in property <bool> animated: true;
     in property <bool> preview-pressed: false;
@@ -67,8 +85,9 @@ component QuotaItem inherits Rectangle {
     // Keep the item surface clear: feedback belongs to the circular meter, not an oval row.
     background: transparent;
     Rectangle {
-        x: (parent.width - self.width) / 2; y: 0px;
-        width: (root.size-mode == 0 ? 50px : (root.size-mode == 1 ? 56px : 62px)) * (0.88 + 0.12 * root.transition);
+        property <length> full-diameter: root.size-mode == 0 ? 50px : (root.size-mode == 1 ? 56px : 62px);
+        x: (parent.width - self.width) / 2; y: (self.full-diameter - self.height) / 2;
+        width: self.full-diameter * (0.86 + 0.14 * root.spread);
         height: self.width; border-radius: self.width / 2;
         background: transparent;
         Image {
@@ -79,9 +98,17 @@ component QuotaItem inherits Rectangle {
         }
         Path {
             x: 2px; y: 2px; width: parent.width - 4px; height: parent.height - 4px;
-            commands: root.transition >= 1 ? root.ring-path : root.render-arc(root.transition * 100);
+            commands: root.ring-path;
             viewbox-width: 56; viewbox-height: 56;
-            stroke: #3b3e43; stroke-width: root.ring-width; stroke-line-cap: round; fill: transparent;
+            stroke: #3b3e43; stroke-width: 1.5px + (root.ring-width - 1.5px) * clamp(root.spread, 0, 1); stroke-line-cap: round; fill: transparent;
+        }
+        Path {
+            x: 2px; y: 2px; width: parent.width - 4px; height: parent.height - 4px;
+            viewbox-width: 56; viewbox-height: 56;
+            commands: root.highlight > 0 && root.highlight < 1 ? root.render-trail(100 * root.highlight + root.service.percent * root.transition - 9, 9) : "";
+            stroke: root.service.accent.brighter(25%); stroke-width: root.ring-width + 0.5px;
+            stroke-line-cap: round; fill: transparent;
+            opacity: 4 * root.highlight * (1 - root.highlight);
         }
         Path {
             x: 2px; y: 2px; width: parent.width - 4px; height: parent.height - 4px;
@@ -97,6 +124,7 @@ component QuotaItem inherits Rectangle {
             width: (root.size-mode == 0 ? 28px : (root.size-mode == 1 ? 32px : 36px)) * (0.90 + 0.10 * root.transition);
             height: self.width; border-radius: self.width / 2;
             background: root.service.source-index == 1 ? (root.is-pressed ? #f3764f : #ff7042) : (root.is-pressed ? root.service.accent.darker(8%) : root.service.accent);
+            opacity: clamp((root.spread - 0.30) / 0.50, 0, 1);
             animate background { duration: root.animated ? 120ms : 0ms; easing: ease-out; }
             drop-shadow-blur: root.selected ? 8px : 0px; drop-shadow-color: #3b82f666;
             Rectangle {
@@ -120,7 +148,7 @@ component QuotaItem inherits Rectangle {
         font-size: root.size-mode == 0 ? 14px : (root.size-mode == 1 ? 15px : 16px);
         font-family: "Bahnschrift"; font-weight: 500; color: Tokens.text;
         horizontal-alignment: center; vertical-alignment: center;
-        opacity: clamp((root.transition - 0.55) / 0.45, 0, 1);
+        opacity: clamp((root.spread - 0.75) / 0.25, 0, 1);
     }
     hit := TouchArea {
         enabled: root.interactive; mouse-cursor: pointer;
@@ -213,12 +241,16 @@ export component MiniWindow inherits Window {
     default-font-family: "Segoe UI";
     icon: @image-url("../assets/app-icon.png");
     in property <bool> animated: true;
+    in property <[Service]> services;
+    pure callback render-trail(float, float) -> string;
     in-out property <bool> revealed: false;
     out property <float> reveal-progress: root.revealed ? 1 : 0;
     animate reveal-progress {
         duration: root.animated ? (root.revealed ? 180ms : 100ms) : 0ms;
         easing: root.revealed ? cubic-bezier(0.18, 0.9, 0.25, 1.12) : cubic-bezier(0.4, 0, 0.2, 1);
     }
+    property <float> rim-progress: root.revealed ? 1 : 0;
+    animate rim-progress { duration: root.animated ? (root.revealed ? 180ms : 100ms) : 0ms; easing: linear; }
     in-out property <bool> dragging: false;
     in-out property <bool> drag-triggered: false;
     in-out property <length> down-x: 0px;
@@ -249,6 +281,13 @@ export component MiniWindow inherits Window {
             image-fit: contain;
             animate width, height, x, y { duration: root.animated ? 120ms : 0ms; easing: ease-out; }
         }
+    }
+    RelayRing {
+        x: (root.width - self.width) / 2; y: (root.height - self.height) / 2;
+        width: 58px * (0.90 + 0.10 * clamp(root.reveal-progress, 0, 1)); height: self.width;
+        services: root.services; turn: 1 - root.rim-progress;
+        strength: 4 * root.rim-progress * (1 - root.rim-progress);
+        render-trail(start, span) => { return root.render-trail(start, span); }
     }
     touch := TouchArea {
         enabled: root.revealed;
@@ -285,6 +324,8 @@ export component CapsuleWindow inherits Window {
     property <length> item-height: root.size-mode == 0 ? 70px : (root.size-mode == 1 ? 77px : 84px);
     property <length> logo-size: root.size-mode == 0 ? 40px : (root.size-mode == 1 ? 44px : 48px);
     property <length> area-gap: root.size-mode == 0 ? 16px : (root.size-mode == 1 ? 18px : 20px);
+    property <length> ring-diameter: root.size-mode == 0 ? 50px : (root.size-mode == 1 ? 56px : 62px);
+    property <length> logo-top: 8px + 8px * root.motion;
     height: 56px + root.logo-size + root.area-gap + root.item-height * max(1, visible-count);
     background: transparent; no-frame: true; always-on-top: true; default-font-family: "Segoe UI";
     icon: @image-url("../assets/app-icon.png");
@@ -295,21 +336,42 @@ export component CapsuleWindow inherits Window {
     // The native window stays fixed; only the surface unfolds from its logo.
     out property <float> reveal-progress: root.revealed ? 1 : 0;
     animate reveal-progress {
-        duration: root.animated ? (root.revealed ? 180ms : 140ms) : 0ms;
+        duration: root.animated ? 180ms : 0ms;
         easing: root.revealed ? cubic-bezier(0.22, 1, 0.36, 1) : cubic-bezier(0.4, 0, 0.2, 1);
     }
     property <float> motion: clamp(root.reveal-progress, 0, 1);
+    property <float> visibility: clamp(max(root.motion * 4, root.ring-progress * 10), 0, 1);
     // The existing quota rings share one reversible timeline with the shell.
     out property <float> ring-progress: root.revealed ? 1 : 0;
     animate ring-progress {
-        duration: root.animated ? (root.revealed ? 220ms : 140ms) : 0ms;
-        easing: root.revealed ? linear : cubic-bezier(0.22, 1, 0.36, 1);
+        duration: root.animated ? (root.revealed ? 260ms : 180ms) : 0ms;
+        easing: linear;
     }
     pure callback render-arc(float) -> string;
+    pure callback render-trail(float, float) -> string;
+    pure function row-step(index: int) -> float {
+        return clamp((root.ring-progress - 0.04 - index * 0.09) / 0.68, 0, 1);
+    }
     public pure function ring-phase(index: int) -> float {
-        let step = clamp((root.ring-progress - index * 0.10) / 0.75, 0, 1);
+        let step = root.row-step(index);
         return 1 - (1 - step) * (1 - step) * (1 - step);
     }
+    public pure function spread-phase(index: int) -> float {
+        let tail = root.row-step(index) - 1;
+        return max(0, 1 + 1.7 * tail * tail * tail + 0.7 * tail * tail);
+    }
+    pure function ring-offset(index: int) -> length {
+        return root.logo-size / 2 + root.area-gap + index * root.item-height + root.ring-diameter / 2;
+    }
+    pure function ring-bottom(index: int) -> length {
+        let spread = clamp(root.spread-phase(index), 0, 1);
+        return root.logo-top + root.logo-size / 2 + root.ring-offset(index) * spread
+             + root.ring-diameter / 2 * (0.86 + 0.14 * spread)
+             + (root.item-height - root.ring-diameter + 16px) * spread;
+    }
+    out property <length> shell-height: root.visible-count == 0 ? 56px + (root.height - 80px) * root.motion
+        : clamp(max(root.ring-bottom(0), max(root.visible-count > 1 ? root.ring-bottom(1) : 0px,
+                                            root.visible-count > 2 ? root.ring-bottom(2) : 0px)), 56px, root.height - 24px);
     in property <bool> animated: true;
     in property <float> surface-opacity: 0.95;
     in-out property <bool> logo-dragging: false;
@@ -329,10 +391,10 @@ export component CapsuleWindow inherits Window {
     surface := Rectangle {
         x: (root.width - self.width) / 2; y: 12px + 8px * (1 - root.motion);
         width: 56px + (root.width - 80px) * root.motion;
-        height: 56px + (root.height - 80px) * root.motion;
+        height: root.shell-height;
         border-radius: self.width / 2; border-width: 1px; border-color: root.selected-index >= 0 ? #3b82f6 : #45494a;
         background: #1b1c1f;
-        opacity: root.surface-opacity * clamp(root.motion * 4, 0, 1);
+        opacity: root.surface-opacity * root.visibility;
         drop-shadow-blur: 14px; drop-shadow-offset-y: 4px; drop-shadow-color: root.selected-index >= 0 ? #3b82f633 : #00000050;
         TouchArea {
             enabled: root.revealed;
@@ -345,7 +407,7 @@ export component CapsuleWindow inherits Window {
     Rectangle {
         x: 12px; y: surface.y; width: root.width - 24px; height: surface.height;
         background: transparent; clip: true;
-        opacity: root.surface-opacity * clamp(root.motion * 4, 0, 1);
+        opacity: root.surface-opacity * root.visibility;
         TouchArea {
             enabled: root.revealed;
             x: 0px; y: 0px; width: parent.width; height: 16px; mouse-cursor: pointer;
@@ -356,8 +418,8 @@ export component CapsuleWindow inherits Window {
         }
         VerticalLayout {
             x: 0px; y: 0px; width: parent.width;
-            height: root.height - 24px;
-            padding-top: 16px; padding-bottom: 16px; padding-left: 4px; padding-right: 4px; spacing: 0px;
+            height: root.height - 24px - (16px - root.logo-top);
+            padding-top: root.logo-top; padding-bottom: 16px; padding-left: 4px; padding-right: 4px; spacing: 0px;
             HorizontalLayout {
                 height: root.logo-size; alignment: center;
                 Rectangle {
@@ -374,7 +436,7 @@ export component CapsuleWindow inherits Window {
                         width: parent.width * parent.hover-scale * (0.82 + 0.18 * root.motion);
                         height: self.width;
                         x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2 + 10px * (1 - root.motion);
+                        y: (parent.height - self.height) / 2;
                         // The former standard art now serves compact; use the larger
                         // source for the in-between 44px logo to keep edges crisp.
                         source: root.size-mode == 0 ? @image-url("../assets/logo-standard.png") : @image-url("../assets/logo-spacious.png");
@@ -417,22 +479,33 @@ export component CapsuleWindow inherits Window {
             for service[index] in root.services: Rectangle {
                 height: root.item-height;
                 property <float> entrance: root.ring-phase(index);
+                property <float> spread: root.spread-phase(index);
                 QuotaItem {
-                    x: (parent.width - self.width) / 2; y: 6px * (1 - parent.entrance);
-                    opacity: clamp(parent.entrance * 3, 0, 1);
+                    x: (parent.width - self.width) / 2; y: -root.ring-offset(index) * (1 - parent.spread);
+                    opacity: root.visibility;
                     transition: parent.entrance;
+                    spread: parent.spread;
+                    highlight: clamp((root.ring-progress - 0.10 - index * 0.15) / 0.36, 0, 1);
                     render-arc(percent) => { return root.render-arc(percent); }
+                    render-trail(start, span) => { return root.render-trail(start, span); }
                     service: service; size-mode: root.size-mode;
                     preview-pressed: root.preview-pressed-service == service.source-index;
                     selected: root.selected-index == service.source-index;
                     animated: root.animated;
-                    interactive: root.revealed && root.motion > 0.85 && parent.entrance > 0.75;
+                    interactive: root.revealed && root.motion > 0.85 && parent.spread > 0.95 && parent.entrance > 0.85;
                     activated => { root.open-service(service.source-index); }
                     context-requested(x, y) => { root.show-menu(self.absolute-position.x - root.absolute-position.x + x,
                                                                self.absolute-position.y - root.absolute-position.y + y); }
                 }
             }
         }
+    }
+    RelayRing {
+        width: root.logo-size + 8px; height: self.width; x: (root.width - self.width) / 2;
+        y: surface.y + root.logo-top + root.logo-size / 2 - self.height / 2;
+        services: root.services; turn: root.ring-progress;
+        strength: (1 - clamp(root.ring-progress / 0.45, 0, 1)) * root.visibility;
+        render-trail(start, span) => { return root.render-trail(start, span); }
     }
 }
 

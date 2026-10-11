@@ -44,6 +44,27 @@ fn arc_percent(percent: f32) -> SharedString {
     format!("M 28 4 A 24 24 0 {large} 1 {end_x:.2} {end_y:.2}").into()
 }
 
+fn arc_trail(start: f32, span: f32) -> SharedString {
+    if !start.is_finite() || !span.is_finite() || span <= 0.0 {
+        return "".into();
+    }
+    let point = |percent: f64| {
+        let angle = (percent * 3.6 - 90.0).to_radians();
+        (28.0 + 24.0 * angle.cos(), 28.0 + 24.0 * angle.sin())
+    };
+    let (x, y) = point(start as f64);
+    if span >= 100.0 {
+        let (mx, my) = point(start as f64 + 50.0);
+        return format!(
+            "M {x:.2} {y:.2} A 24 24 0 0 1 {mx:.2} {my:.2} A 24 24 0 0 1 {x:.2} {y:.2} Z"
+        )
+        .into();
+    }
+    let (ex, ey) = point(start as f64 + span as f64);
+    let large = if span > 50.0 { 1 } else { 0 };
+    format!("M {x:.2} {y:.2} A 24 24 0 {large} 1 {ex:.2} {ey:.2}").into()
+}
+
 fn service(index: usize, visible: bool) -> Service {
     let tint = match index {
         0 => slint::Color::from_rgb_u8(34, 197, 94),
@@ -342,7 +363,7 @@ fn collapse_entry(
     }
     let weak = capsule.as_weak();
     let motion = motion.clone();
-    Timer::single_shot(Duration::from_millis(160), move || {
+    Timer::single_shot(Duration::from_millis(200), move || {
         if motion.0.get() == generation {
             if let Some(c) = weak.upgrade() {
                 let _ = c.hide();
@@ -659,8 +680,13 @@ fn qa_click(window: &slint::Window, x: f32, y: f32) {
 }
 
 #[cfg(debug_assertions)]
-fn qa_entry_frame(window: &slint::Window, name: &str) -> usize {
-    let frame = window.take_snapshot().expect("Entry animation snapshot");
+thread_local! {
+    // Encode after the animation: PNG compression must not delay live samples.
+    static ENTRY_FRAMES: RefCell<Vec<(String, slint::SharedPixelBuffer<slint::Rgba8Pixel>)>> = const { RefCell::new(Vec::new()) };
+}
+
+#[cfg(debug_assertions)]
+fn qa_write_entry_frame(frame: &slint::SharedPixelBuffer<slint::Rgba8Pixel>, name: &str) {
     let mut encoder = png::Encoder::new(
         std::fs::File::create(format!("target/qa-entry-{name}.png")).unwrap(),
         frame.width(),
@@ -673,6 +699,16 @@ fn qa_entry_frame(window: &slint::Window, name: &str) -> usize {
         .unwrap()
         .write_image_data(frame.as_bytes())
         .unwrap();
+}
+
+#[cfg(debug_assertions)]
+fn qa_entry_frame(window: &slint::Window, name: &str) -> usize {
+    let frame = window.take_snapshot().expect("Entry animation snapshot");
+    if std::env::var_os("WACU_QA_ENTRY_MOTION").is_some() {
+        ENTRY_FRAMES.with(|frames| frames.borrow_mut().push((name.into(), frame.clone())));
+    } else {
+        qa_write_entry_frame(&frame, name);
+    }
     // Count the opaque silhouette, excluding transient glow and shadow pixels.
     let width = frame.width() as usize;
     (0..frame.height() as usize)
@@ -721,8 +757,12 @@ fn qa_entry_animation(mini: &MiniWindow, capsule: &CapsuleWindow, settings: &Set
         let heights = Rc::new(RefCell::new(Vec::new()));
         for delay in [40, 60, 100, 120, 160, 200, 260, 300] {
             let c = c.clone();
+            let m = m.clone();
             Timer::single_shot(Duration::from_millis(delay), move || {
                 qa_entry_frame(c.upgrade().unwrap().window(), &format!("open-fx-{delay}"));
+                if delay <= 100 {
+                    qa_entry_frame(m.upgrade().unwrap().window(), &format!("mini-exit-{delay}"));
+                }
             });
         }
         for (delay, name) in [(30, "open-early"), (80, "open-mid"), (225, "open-rest")] {
@@ -742,6 +782,19 @@ fn qa_entry_animation(mini: &MiniWindow, capsule: &CapsuleWindow, settings: &Set
                     if progress > 0.2 && progress < 0.75 {
                         assert!(first > last, "Active ring stages must be staggered");
                     }
+                }
+                let scale = capsule.window().scale_factor();
+                assert!(
+                    capsule.get_shell_height() >= 56.0
+                        && capsule.get_shell_height()
+                            <= capsule.window().size().height as f32 / scale - 24.0 + 0.5
+                );
+                for index in 0..capsule.get_visible_count() {
+                    let spread = capsule.invoke_spread_phase(index);
+                    assert!(
+                        (0.0..=1.04).contains(&spread),
+                        "Spring motion must remain within the window margins"
+                    );
                 }
                 heights
                     .borrow_mut()
@@ -816,10 +869,15 @@ fn qa_entry_close(
         "Collapsing must begin exit animation"
     );
     let heights = Rc::new(RefCell::new(vec![full_height]));
-    for delay in [20, 50, 110, 130] {
+    for delay in [20, 50, 110, 130, 170] {
         let c = c.clone();
+        let m = m.clone();
         Timer::single_shot(Duration::from_millis(delay), move || {
             qa_entry_frame(c.upgrade().unwrap().window(), &format!("close-fx-{delay}"));
+            qa_entry_frame(
+                m.upgrade().unwrap().window(),
+                &format!("mini-return-{delay}"),
+            );
         });
     }
     // Schedule against the actual collapse, so a busy desktop cannot make the
@@ -842,7 +900,7 @@ fn qa_entry_close(
             );
         });
     }
-    Timer::single_shot(Duration::from_millis(200), move || {
+    Timer::single_shot(Duration::from_millis(240), move || {
         let mini = m.upgrade().unwrap();
         assert!(mini.window().is_visible());
         assert!(!c.upgrade().unwrap().window().is_visible());
@@ -1179,7 +1237,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let capsule = CapsuleWindow::new()?;
     capsule.on_render_arc(arc_percent);
+    capsule.on_render_trail(arc_trail);
     let mini = MiniWindow::new()?;
+    mini.on_render_trail(arc_trail);
     mini.set_animated(initial.animations_enabled);
     let menu = EntryMenuWindow::new()?;
     let settings = SettingsWindow::new()?;
@@ -1195,6 +1255,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .collect::<Vec<_>>(),
     ));
     capsule.set_services(ModelRc::from(model.clone()));
+    mini.set_services(ModelRc::from(model.clone()));
     refresh_model(&model, &capsule, &settings, &initial);
 
     {
@@ -2730,6 +2791,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         });
     }
     slint::run_event_loop()?;
+    #[cfg(debug_assertions)]
+    ENTRY_FRAMES.with(|frames| {
+        for (name, frame) in frames.borrow_mut().drain(..) {
+            qa_write_entry_frame(&frame, &name);
+        }
+    });
     if mini_active && persist_entry_preferences() {
         // Use the logical view saved at the start of a switch: both native
         // windows can still be visible when quitting during the animation.
@@ -2844,6 +2911,18 @@ mod tests {
         assert!(arc_percent(0.5).as_str().ends_with("28.75 4.01"));
         assert!(arc_percent(25.0).as_str().ends_with("52.00 28.00"));
         assert_eq!(arc_percent(100.0), arc_svg(100));
+    }
+
+    #[test]
+    fn moving_ring_trail_wraps_and_retains_clockwise_geometry() {
+        assert_eq!(
+            arc_trail(25.0, 25.0).as_str(),
+            "M 52.00 28.00 A 24 24 0 0 1 28.00 52.00"
+        );
+        assert_eq!(arc_trail(90.0, 20.0), arc_trail(-10.0, 20.0));
+        assert!(arc_trail(10.0, 0.0).is_empty());
+        assert!(arc_trail(f32::NAN, 9.0).is_empty());
+        assert!(arc_trail(10.0, 100.0).as_str().ends_with('Z'));
     }
 
     #[test]
