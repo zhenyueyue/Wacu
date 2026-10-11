@@ -457,14 +457,11 @@ impl EntryMotion {
         mini.set_revealed(!open);
         capsule.set_revealed(open);
         self.frame(mini, capsule, from);
-        let base = match (geometry.spatial(), open) {
-            (true, true) => flow::OPEN_MS,
-            (true, false) => flow::CLOSE_MS,
-            (false, true) => flow::LOCAL_OPEN_MS,
-            (false, false) => flow::LOCAL_CLOSE_MS,
-        };
+        let base = flow::base_ms(geometry.spatial(), open);
         let to = if open { 1.0 } else { 0.0 };
-        let duration = Duration::from_secs_f64(base as f64 / 1000.0 * (to - from).abs());
+        let from_time = flow::time_position(geometry.spatial(), from);
+        let to_time = flow::time_position(geometry.spatial(), to);
+        let duration = Duration::from_secs_f64(base as f64 / 1000.0 * (to_time - from_time).abs());
         fn step(
             motion: EntryMotion,
             mini: slint::Weak<MiniWindow>,
@@ -486,7 +483,15 @@ impl EntryMotion {
             } else {
                 (start.elapsed().as_secs_f64() / duration.as_secs_f64()).min(1.0)
             };
-            motion.frame(&m, &c, from + (to - from) * t);
+            let spatial = motion.geometry.borrow().unwrap().spatial();
+            let from_time = flow::time_position(spatial, from);
+            let to_time = flow::time_position(spatial, to);
+            let progress = if t >= 1.0 {
+                to
+            } else {
+                flow::progress_at(spatial, from_time + (to_time - from_time) * t)
+            };
+            motion.frame(&m, &c, progress);
             if t >= 1.0 {
                 motion.settle(&m, &c, to == 1.0);
             } else {
@@ -1021,7 +1026,12 @@ fn qa_entry_animation(
                 }
             });
         }
-        for (delay, name) in [(30, "open-early"), (300, "open-mid"), (740, "open-rest")] {
+        let open_rest = flow::duration_ms(false, true) + 110;
+        for (delay, name) in [
+            (30, "open-early"),
+            (300, "open-mid"),
+            (open_rest, "open-rest"),
+        ] {
             let c = c.clone();
             let m = m.clone();
             let s = s.clone();
@@ -1069,11 +1079,11 @@ fn qa_entry_animation(
                         "Mini must shrink in rendered pixels"
                     );
                 }
-                if delay == 740 {
+                if delay == open_rest {
                     assert_eq!(
                         capsule.get_reveal_progress(),
                         1.0,
-                        "Opening must finish within 740ms"
+                        "Opening must finish within its assembly duration"
                     );
                     assert!(!m.upgrade().unwrap().window().is_visible());
                     let h = heights.borrow();
@@ -1138,7 +1148,10 @@ fn qa_entry_close(
     }
     // Schedule against the actual collapse, so a busy desktop cannot make the
     // completion assertion run before a delayed click's hide timer.
-    for (delay, name) in [(30, "close-early"), (240, "close-mid")] {
+    let close_mid = (flow::base_ms(false, false) as f64
+        * (flow::time_position(false, 1.0) - flow::time_position(false, 0.50)))
+    .ceil() as u64;
+    for (delay, name) in [(30, "close-early"), (close_mid, "close-mid")] {
         let c = c.clone();
         let m = m.clone();
         let heights = heights.clone();
@@ -1156,52 +1169,58 @@ fn qa_entry_close(
             );
         });
     }
-    Timer::single_shot(Duration::from_millis(580), move || {
-        let mini = m.upgrade().unwrap();
-        assert!(mini.window().is_visible());
-        assert!(!c.upgrade().unwrap().window().is_visible());
-        assert_eq!(mini.window().position(), mini_position);
-        let h = heights.borrow();
-        assert!(
-            h[0] > h[2] && h[0] >= h[1] && h[1] >= h[2],
-            "Shell must fold in rendered frames: {h:?}"
-        );
-        qa_entry_frame(mini.window(), "mini-return-rest");
-        // Reverse both directions before pending show/hide timers finish.
-        for (delay, expand) in [(0, true), (10, false), (20, true), (50, false), (80, true)] {
-            let m = m.clone();
-            let c = c.clone();
-            Timer::single_shot(Duration::from_millis(delay), move || {
-                if expand {
-                    m.upgrade().unwrap().invoke_toggle_expanded();
-                } else {
-                    c.upgrade().unwrap().invoke_collapse_to_mini();
-                }
-            });
-        }
-        Timer::single_shot(Duration::from_millis(800), move || {
+    Timer::single_shot(
+        Duration::from_millis(flow::duration_ms(false, false) + 100),
+        move || {
             let mini = m.upgrade().unwrap();
-            let capsule = c.upgrade().unwrap();
-            let settings = s.upgrade().unwrap();
-            assert!(capsule.window().is_visible() && capsule.get_revealed());
-            assert!(!mini.window().is_visible());
-            settings.invoke_set_animations(false);
-            capsule.invoke_collapse_to_mini();
-            assert!(!capsule.window().is_visible());
-            assert!(mini.window().is_visible() && mini.get_revealed());
-            assert_eq!(mini.get_reveal_progress(), 1.0);
-            assert_eq!(capsule.get_ring_progress(), 0.0);
-            mini.invoke_toggle_expanded();
-            assert!(!mini.window().is_visible());
-            assert!(capsule.window().is_visible() && capsule.get_revealed());
-            assert_eq!(capsule.get_reveal_progress(), 1.0);
-            assert_eq!(capsule.get_ring_progress(), 1.0);
-            capsule.invoke_collapse_to_mini();
-            settings.invoke_set_animations(true);
-            eprintln!("WACU_QA entry_reversal_disabled_pass");
-            let _ = slint::quit_event_loop();
-        });
-    });
+            assert!(mini.window().is_visible());
+            assert!(!c.upgrade().unwrap().window().is_visible());
+            assert_eq!(mini.window().position(), mini_position);
+            let h = heights.borrow();
+            assert!(
+                h[0] > h[2] && h[0] >= h[1] && h[1] >= h[2],
+                "Shell must fold in rendered frames: {h:?}"
+            );
+            qa_entry_frame(mini.window(), "mini-return-rest");
+            // Reverse both directions before pending show/hide timers finish.
+            for (delay, expand) in [(0, true), (10, false), (20, true), (50, false), (80, true)] {
+                let m = m.clone();
+                let c = c.clone();
+                Timer::single_shot(Duration::from_millis(delay), move || {
+                    if expand {
+                        m.upgrade().unwrap().invoke_toggle_expanded();
+                    } else {
+                        c.upgrade().unwrap().invoke_collapse_to_mini();
+                    }
+                });
+            }
+            Timer::single_shot(
+                Duration::from_millis(flow::duration_ms(false, true) + 170),
+                move || {
+                    let mini = m.upgrade().unwrap();
+                    let capsule = c.upgrade().unwrap();
+                    let settings = s.upgrade().unwrap();
+                    assert!(capsule.window().is_visible() && capsule.get_revealed());
+                    assert!(!mini.window().is_visible());
+                    settings.invoke_set_animations(false);
+                    capsule.invoke_collapse_to_mini();
+                    assert!(!capsule.window().is_visible());
+                    assert!(mini.window().is_visible() && mini.get_revealed());
+                    assert_eq!(mini.get_reveal_progress(), 1.0);
+                    assert_eq!(capsule.get_ring_progress(), 0.0);
+                    mini.invoke_toggle_expanded();
+                    assert!(!mini.window().is_visible());
+                    assert!(capsule.window().is_visible() && capsule.get_revealed());
+                    assert_eq!(capsule.get_reveal_progress(), 1.0);
+                    assert_eq!(capsule.get_ring_progress(), 1.0);
+                    capsule.invoke_collapse_to_mini();
+                    settings.invoke_set_animations(true);
+                    eprintln!("WACU_QA entry_reversal_disabled_pass");
+                    let _ = slint::quit_event_loop();
+                },
+            );
+        },
+    );
 }
 
 #[cfg(debug_assertions)]
@@ -1354,7 +1373,10 @@ fn qa_entry_handoff(
         assert!(platform_windows::utility_window_is_taskbar_excluded(
             capsule.window()
         ));
-        for delay in (30..=2700).step_by(30) {
+        let open_rest = flow::duration_ms(direction != 0, true) + 180;
+        let restart = open_rest + flow::duration_ms(direction != 0, false) + 180;
+        let reversed_rest = flow::duration_ms(direction != 0, true) + 220;
+        for delay in (30..=restart - 60).step_by(30) {
             let m = m.clone();
             let c = c.clone();
             let motion = motion.clone();
@@ -1379,7 +1401,7 @@ fn qa_entry_handoff(
         }
         let cap = c.clone();
         let pref = prefs.clone();
-        Timer::single_shot(Duration::from_millis(1400), move || {
+        Timer::single_shot(Duration::from_millis(open_rest), move || {
             let capsule = cap.upgrade().unwrap();
             assert!(capsule.get_revealed() && capsule.get_ring_progress() == 1.0);
             assert_eq!(
@@ -1392,7 +1414,7 @@ fn qa_entry_handoff(
         let m2 = m.clone();
         let c2 = c.clone();
         let pref = prefs.clone();
-        Timer::single_shot(Duration::from_millis(2800), move || {
+        Timer::single_shot(Duration::from_millis(restart), move || {
             let mini = m2.upgrade().unwrap();
             assert!(mini.get_revealed() && mini.window().is_visible());
             assert_eq!(
@@ -1410,76 +1432,79 @@ fn qa_entry_handoff(
             mini.invoke_toggle_expanded();
             c2.upgrade().unwrap().invoke_collapse_to_mini();
             mini.invoke_toggle_expanded();
-        });
-        // Keep reading the reversed window while the test desktop can occlude
-        // it; an undrawn Slint window may still report its previous frame phase.
-        for delay in [3000, 3250, 3500, 3750, 4000] {
-            let cap = c.clone();
-            Timer::single_shot(Duration::from_millis(delay), move || {
-                qa_entry_frame(
-                    cap.upgrade().unwrap().window(),
-                    &format!("handoff-reverse-{delay}"),
+            // Schedule from the actual reverse click, since framebuffer readbacks
+            // can delay the restart callback on a busy test desktop. Keep reading
+            // the window so an occluded surface cannot retain an old frame phase.
+            for delay in (200..reversed_rest).step_by(250) {
+                let cap = c.clone();
+                Timer::single_shot(Duration::from_millis(delay), move || {
+                    qa_entry_frame(
+                        cap.upgrade().unwrap().window(),
+                        &format!("handoff-reverse-{delay}"),
+                    );
+                });
+            }
+            Timer::single_shot(Duration::from_millis(reversed_rest), move || {
+                let mini = m.upgrade().unwrap();
+                let capsule = c.upgrade().unwrap();
+                assert!(!motion.active.get(), "Reversed motion clock must settle");
+                qa_entry_frame(capsule.window(), "handoff-reversed-rest");
+                assert!(
+                    capsule.get_revealed() && capsule.get_ring_progress() == 1.0,
+                    "Reversed relay must settle: revealed={} progress={}",
+                    capsule.get_revealed(),
+                    capsule.get_ring_progress()
                 );
-            });
-        }
-        Timer::single_shot(Duration::from_millis(4300), move || {
-            let mini = m.upgrade().unwrap();
-            let capsule = c.upgrade().unwrap();
-            assert!(
-                capsule.get_revealed() && capsule.get_ring_progress() == 1.0,
-                "Reversed relay must settle: revealed={} progress={}",
-                capsule.get_revealed(),
-                capsule.get_ring_progress()
-            );
-            s.upgrade().unwrap().invoke_set_animations(false);
-            capsule.invoke_collapse_to_mini();
-            assert!(mini.get_revealed() && !capsule.window().is_visible());
-            mini.invoke_toggle_expanded();
-            assert!(capsule.get_revealed() && !mini.window().is_visible());
-            // Every settings combination, including a lone green or purple
-            // service, must keep its original identity in all three surfaces.
-            let settings = s.upgrade().unwrap();
-            let original_count = capsule.get_visible_count();
-            for mask in 0..8 {
-                let shown = std::array::from_fn(|index| mask & (1 << index) != 0);
+                s.upgrade().unwrap().invoke_set_animations(false);
+                capsule.invoke_collapse_to_mini();
+                assert!(mini.get_revealed() && !capsule.window().is_visible());
+                mini.invoke_toggle_expanded();
+                assert!(capsule.get_revealed() && !mini.window().is_visible());
+                // Every settings combination, including a lone green or purple
+                // service, must keep its original identity in all three surfaces.
+                let settings = s.upgrade().unwrap();
+                let original_count = capsule.get_visible_count();
+                for mask in 0..8 {
+                    let shown = std::array::from_fn(|index| mask & (1 << index) != 0);
+                    for (index, enabled) in shown.iter().enumerate() {
+                        settings.invoke_toggle_service(index as i32, *enabled);
+                    }
+                    let expected = visible_service_indices(&shown).collect::<Vec<_>>();
+                    assert_eq!(capsule.get_services().row_count(), expected.len());
+                    assert_eq!(mini.get_services().row_count(), expected.len());
+                    for (row, id) in expected.iter().enumerate() {
+                        assert_eq!(
+                            capsule.get_services().row_data(row).unwrap().source_index,
+                            *id as i32
+                        );
+                    }
+                    qa_entry_frame(capsule.window(), &format!("handoff-selection-{mask}"));
+                }
+                let mut shown = [false; 3];
+                for &index in [1, 0, 2].iter().take(original_count as usize) {
+                    shown[index] = true;
+                }
                 for (index, enabled) in shown.iter().enumerate() {
                     settings.invoke_toggle_service(index as i32, *enabled);
                 }
-                let expected = visible_service_indices(&shown).collect::<Vec<_>>();
-                assert_eq!(capsule.get_services().row_count(), expected.len());
-                assert_eq!(mini.get_services().row_count(), expected.len());
-                for (row, id) in expected.iter().enumerate() {
-                    assert_eq!(
-                        capsule.get_services().row_data(row).unwrap().source_index,
-                        *id as i32
+                settings.invoke_set_animations(true);
+                capsule.invoke_collapse_to_mini();
+                mini.invoke_toggle_expanded();
+                settings.invoke_set_animations(false);
+                assert!(!motion.active.get() && !motion.layer.window().is_visible());
+                assert!(!mini.get_flow_active() && !capsule.get_flow_controlled());
+                assert!(platform_windows::utility_window_is_taskbar_excluded(
+                    capsule.window()
+                ));
+                let cap = capsule.as_weak();
+                Timer::single_shot(Duration::from_millis(420), move || {
+                    let capsule = cap.upgrade().unwrap();
+                    assert!(capsule.window().is_visible() && capsule.get_revealed());
+                    eprintln!(
+                        "WACU_QA entry_handoff_pass direction={direction} count={original_count} independent_positions separated_routes logo_handoff click_through taskbar_excluded reversal disabled all_service_combinations"
                     );
-                }
-                qa_entry_frame(capsule.window(), &format!("handoff-selection-{mask}"));
-            }
-            let mut shown = [false; 3];
-            for &index in [1, 0, 2].iter().take(original_count as usize) {
-                shown[index] = true;
-            }
-            for (index, enabled) in shown.iter().enumerate() {
-                settings.invoke_toggle_service(index as i32, *enabled);
-            }
-            settings.invoke_set_animations(true);
-            capsule.invoke_collapse_to_mini();
-            mini.invoke_toggle_expanded();
-            settings.invoke_set_animations(false);
-            assert!(!motion.active.get() && !motion.layer.window().is_visible());
-            assert!(!mini.get_flow_active() && !capsule.get_flow_controlled());
-            assert!(platform_windows::utility_window_is_taskbar_excluded(
-                capsule.window()
-            ));
-            let cap = capsule.as_weak();
-            Timer::single_shot(Duration::from_millis(420), move || {
-                let capsule = cap.upgrade().unwrap();
-                assert!(capsule.window().is_visible() && capsule.get_revealed());
-                eprintln!(
-                    "WACU_QA entry_handoff_pass direction={direction} count={original_count} independent_positions separated_routes logo_handoff click_through taskbar_excluded reversal disabled all_service_combinations"
-                );
-                let _ = slint::quit_event_loop();
+                    let _ = slint::quit_event_loop();
+                });
             });
         });
     });
@@ -1596,60 +1621,69 @@ fn qa_entry_controls(
             !s.upgrade().unwrap().window().is_visible(),
             "Left click must not open settings"
         );
-        Timer::single_shot(Duration::from_millis(flow::OPEN_MS + 150), move || {
-            let capsule = c.upgrade().unwrap();
-            let settings = s.upgrade().unwrap();
-            let x = capsule.window().size().width as f32 / capsule.window().scale_factor() / 2.0;
-            let m2 = m.clone();
-            let c2 = c.clone();
-            let s2 = s.clone();
-            let exits2 = exits.clone();
-            let menu2 = menu.clone();
-            qa_menu_actions(
-                &capsule,
-                &menu.upgrade().unwrap(),
-                &settings,
-                (x, 100.0),
-                exits,
-                move || {
-                    let capsule = c2.upgrade().unwrap();
-                    qa_click(capsule.window(), x, 49.0);
-                    assert!(
-                        m2.upgrade().unwrap().window().is_visible(),
-                        "Left click must show Mini synchronously"
-                    );
-                    Timer::single_shot(Duration::from_millis(flow::CLOSE_MS + 150), move || {
-                        let mini = m2.upgrade().unwrap();
-                        let settings = s2.upgrade().unwrap();
-                        let mini3 = mini.as_weak();
-                        let menu3 = menu2.clone();
-                        qa_menu_actions(
-                            &mini,
-                            &menu2.upgrade().unwrap(),
-                            &settings,
-                            (33.0, 33.0),
-                            exits2,
+        Timer::single_shot(
+            Duration::from_millis(flow::duration_ms(true, true) + 150),
+            move || {
+                let capsule = c.upgrade().unwrap();
+                let settings = s.upgrade().unwrap();
+                let x =
+                    capsule.window().size().width as f32 / capsule.window().scale_factor() / 2.0;
+                let m2 = m.clone();
+                let c2 = c.clone();
+                let s2 = s.clone();
+                let exits2 = exits.clone();
+                let menu2 = menu.clone();
+                qa_menu_actions(
+                    &capsule,
+                    &menu.upgrade().unwrap(),
+                    &settings,
+                    (x, 100.0),
+                    exits,
+                    move || {
+                        let capsule = c2.upgrade().unwrap();
+                        qa_click(capsule.window(), x, 49.0);
+                        assert!(
+                            m2.upgrade().unwrap().window().is_visible(),
+                            "Left click must show Mini synchronously"
+                        );
+                        Timer::single_shot(
+                            Duration::from_millis(flow::duration_ms(true, false) + 150),
                             move || {
-                                let mini = mini3.upgrade().unwrap();
-                                mini.invoke_show_menu(33.0, 33.0);
-                                let menu = menu3.upgrade().unwrap();
-                                menu.window().dispatch_event(
-                                    slint::platform::WindowEvent::WindowActiveChanged(true),
+                                let mini = m2.upgrade().unwrap();
+                                let settings = s2.upgrade().unwrap();
+                                let mini3 = mini.as_weak();
+                                let menu3 = menu2.clone();
+                                qa_menu_actions(
+                                    &mini,
+                                    &menu2.upgrade().unwrap(),
+                                    &settings,
+                                    (33.0, 33.0),
+                                    exits2,
+                                    move || {
+                                        let mini = mini3.upgrade().unwrap();
+                                        mini.invoke_show_menu(33.0, 33.0);
+                                        let menu = menu3.upgrade().unwrap();
+                                        menu.window().dispatch_event(
+                                            slint::platform::WindowEvent::WindowActiveChanged(true),
+                                        );
+                                        menu.window().dispatch_event(
+                                            slint::platform::WindowEvent::WindowActiveChanged(
+                                                false,
+                                            ),
+                                        );
+                                        assert!(
+                                            !menu.window().is_visible(),
+                                            "Clicking away must dismiss the menu on focus loss"
+                                        );
+                                        eprintln!("WACU_QA entry_immediate_menu_pass");
+                                    },
                                 );
-                                menu.window().dispatch_event(
-                                    slint::platform::WindowEvent::WindowActiveChanged(false),
-                                );
-                                assert!(
-                                    !menu.window().is_visible(),
-                                    "Clicking away must dismiss the menu on focus loss"
-                                );
-                                eprintln!("WACU_QA entry_immediate_menu_pass");
                             },
                         );
-                    });
-                },
-            );
-        });
+                    },
+                );
+            },
+        );
     });
 }
 
@@ -3249,7 +3283,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         let d = detail.as_weak();
         let s = settings.as_weak();
         let snapshot_delay = if std::env::var_os("WACU_QA_ENTRY_CONTROLS").is_some() {
-            4200
+            4200 + flow::duration_ms(true, true) - flow::OPEN_MS + flow::duration_ms(true, false)
+                - flow::CLOSE_MS
         } else if std::env::var_os("WACU_QA_DETAIL_FADE").is_some() {
             1250
         } else if std::env::var_os("WACU_QA_MINI_POSITIONS").is_some() {

@@ -6,6 +6,49 @@ pub const CLOSE_MS: u64 = 930;
 pub const LOCAL_OPEN_MS: u64 = 630;
 pub const LOCAL_CLOSE_MS: u64 = 480;
 
+// Keep the established desktop travel rate. Only the assembly after all
+// three lines have reached the Logo gets 65% more time, with a smooth ramp.
+pub fn time_position(spatial: bool, progress: f64) -> f64 {
+    let split = if spatial { 0.52 } else { 0.10 };
+    let ramp = 0.08;
+    let after = (progress.clamp(0.0, 1.0) - split).max(0.0);
+    let extra = if after < ramp {
+        let t = after / ramp;
+        ramp * (t.powi(3) - t.powi(4) / 2.0)
+    } else {
+        after - ramp / 2.0
+    };
+    progress.clamp(0.0, 1.0) + 0.65 * extra
+}
+
+pub fn progress_at(spatial: bool, time: f64) -> f64 {
+    let mut low = 0.0;
+    let mut high = 1.0;
+    for _ in 0..40 {
+        let middle = (low + high) / 2.0;
+        if time_position(spatial, middle) < time {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    ((low + high) / 2.0).clamp(0.0, 1.0)
+}
+
+pub fn base_ms(spatial: bool, open: bool) -> u64 {
+    match (spatial, open) {
+        (true, true) => OPEN_MS,
+        (true, false) => CLOSE_MS,
+        (false, true) => LOCAL_OPEN_MS,
+        (false, false) => LOCAL_CLOSE_MS,
+    }
+}
+
+#[cfg(debug_assertions)]
+pub fn duration_ms(spatial: bool, open: bool) -> u64 {
+    (base_ms(spatial, open) as f64 * time_position(spatial, 1.0)).ceil() as u64
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Vector {
     pub x: f64,
@@ -177,7 +220,7 @@ impl Geometry {
             - self.quota_width)
             * 24.0
             / 56.0;
-        let destination_y = center.y - radius;
+        let destination_y = center.y + radius;
         (0..=64)
             .map(|j| {
                 let s = j as f64 / 64.0;
@@ -200,9 +243,8 @@ impl Geometry {
                 if coil == 0.0 {
                     return interpolate(arc, line, unwrap);
                 }
-                // Curl around the outside of the meter instead of dragging a
-                // straight chord through its avatar. At zero curvature this
-                // is the incoming vertical line; at one it is the quota arc.
+                // First round the lower corner, then orbit from underneath
+                // into the quota arc. Both stages stay outside the avatar.
                 let line_center = Vector {
                     x: line.x,
                     y: self.logo.y + (destination_y - self.logo.y) * down,
@@ -210,17 +252,19 @@ impl Geometry {
                 let span = PI * 2.0 * percent.clamp(0.0, 100.0) / 100.0;
                 let final_angle = -PI / 2.0 + span / 2.0;
                 let initial_angle = (line_center.y - center.y).atan2(line_center.x - center.x);
-                let turn = (final_angle - initial_angle + PI).rem_euclid(PI * 2.0) - PI;
-                let mid_angle = initial_angle + turn * coil;
+                let bend = smooth(coil / 0.32);
+                let orbit = smooth((coil - 0.32) / 0.68);
+                let lower_angle = initial_angle + (PI / 2.0 - initial_angle) * bend;
+                let mid_angle = lower_angle + (final_angle - PI / 2.0) * orbit;
                 let initial_radius = (line_center.x - center.x).hypot(line_center.y - center.y);
-                let mid_radius = initial_radius + (radius - initial_radius) * coil;
+                let mid_radius = initial_radius + (radius - initial_radius) * bend;
                 let mid = Vector {
                     x: center.x + mid_radius * mid_angle.cos(),
                     y: center.y + mid_radius * mid_angle.sin(),
                 };
                 let length = 24.0 * self.target_scale * (1.0 - coil) + radius * span * coil;
                 let sweep = span * coil;
-                let theta = final_angle * coil;
+                let theta = PI / 2.0 * bend + (final_angle - PI / 2.0) * orbit;
                 if sweep <= 0.000001 {
                     return Vector {
                         x: mid.x - theta.sin() * length * (s - 0.5),
@@ -318,6 +362,22 @@ impl Geometry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn desktop_travel_keeps_its_rate_while_assembly_slows() {
+        for step in 0..=52 {
+            let progress = step as f64 / 100.0;
+            assert_eq!(time_position(true, progress), progress);
+        }
+        for spatial in [true, false] {
+            let dt = time_position(spatial, 0.81) - time_position(spatial, 0.80);
+            assert!((dt / 0.01 - 1.65).abs() < 0.000001);
+            for step in 0..=100 {
+                let p = step as f64 / 100.0;
+                assert!((progress_at(spatial, time_position(spatial, p)) - p).abs() < 1e-10);
+            }
+        }
+    }
+
     fn fixture() -> Geometry {
         Geometry {
             source: Vector {
@@ -432,6 +492,29 @@ mod tests {
                 assert!((p.y - center.y - radius * angle.sin()).abs() < 0.0001);
             }
             assert_eq!(g.width(3, i, 1.0), g.quota_width);
+        }
+    }
+
+    #[test]
+    fn lines_round_the_lower_corner_before_orbiting_to_quota_arcs() {
+        let g = fixture();
+        for count in 1..=3 {
+            for i in 0..count {
+                let p = (0..=10000)
+                    .map(|step| step as f64 / 10000.0)
+                    .min_by(|a, b| {
+                        (g.coil(count, i, *a) - 0.32)
+                            .abs()
+                            .total_cmp(&(g.coil(count, i, *b) - 0.32).abs())
+                    })
+                    .unwrap();
+                let midpoint = g.points(count, i, p, 24.0)[32];
+                let center_y = g.logo.y + g.quota_offset + i as f64 * g.quota_step;
+                // The entering meter is still at its smaller entrance size.
+                // Its bottom corner must nevertheless be below the avatar.
+                assert!(midpoint.y > center_y + g.quota_diameter * 0.30);
+                assert!((midpoint.x - g.logo.x).abs() < 8.0 * g.target_scale);
+            }
         }
     }
 

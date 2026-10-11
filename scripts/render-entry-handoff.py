@@ -23,7 +23,7 @@ for count in range(4):
         for window in scene['windows']:
             frame = Image.open(directory / (window['name'] + '.png')).convert('RGBA')
             canvas.alpha_composite(frame, (window['x'] - left, window['y'] - top + 40))
-        ImageDraw.Draw(canvas).text((16, 8), f'{count} 个额度环 · 经 Logo 连续卷入 · 实际速度', font=font, fill='#e4e4e7')
+        ImageDraw.Draw(canvas).text((16, 8), f'{count} 个额度环 · 下沿转入 · 窗内慢速 · 实际速度', font=font, fill='#e4e4e7')
         frames.append(canvas.convert('RGB'))
         interval = scenes[index + 1]['time'] - scene['time'] if index + 1 < len(scenes) else 400
         durations.append(max(20, round(interval / 10) * 10))
