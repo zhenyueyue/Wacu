@@ -137,9 +137,10 @@ export component MiniWindow inherits Window {
     in-out property <length> down-x: 0px;
     in-out property <length> down-y: 0px;
     callback toggle-expanded();
-    callback icon-clicked();
     callback start-drag();
     callback open-settings();
+    callback exit-app();
+    public function close-menu() { context.close(); }
     // A single interaction-driven pulse; no idle animation or frame timer.
     Rectangle {
         x: (root.width - self.width) / 2; y: (root.height - self.height) / 2;
@@ -180,7 +181,6 @@ export component MiniWindow inherits Window {
             }
             if event.kind == PointerEventKind.down && event.button == PointerEventButton.right {
                 root.drag-triggered = true;
-                root.open-settings();
             }
         }
         moved => {
@@ -192,7 +192,14 @@ export component MiniWindow inherits Window {
                 root.start-drag();
             }
         }
-        clicked => { if !root.drag-triggered { root.icon-clicked(); } }
+        clicked => { if !root.drag-triggered { root.toggle-expanded(); } }
+    }
+    context := ContextMenuArea {
+        enabled: root.revealed;
+        Menu {
+            MenuItem { title: "设置"; activated => { root.open-settings(); } }
+            MenuItem { title: "退出"; activated => { root.exit-app(); } }
+        }
     }
 }
 
@@ -224,10 +231,11 @@ export component CapsuleWindow inherits Window {
     in-out property <length> logo-down-x: 0px;
     in-out property <length> logo-down-y: 0px;
     callback collapse-to-mini();
-    callback icon-clicked();
     in property <int> preview-pressed-service: -1;
     callback open-service(int);
     callback open-settings();
+    callback exit-app();
+    public function close-menu() { context.close(); }
     callback start-drag();
     surface := Rectangle {
         x: (root.width - self.width) / 2; y: 12px + 8px * (1 - root.motion);
@@ -298,7 +306,7 @@ export component CapsuleWindow inherits Window {
                                 root.start-drag();
                             }
                         }
-                        clicked => { if !root.logo-drag-triggered { root.icon-clicked(); } }
+                        clicked => { if !root.logo-drag-triggered { root.collapse-to-mini(); } }
                     }
                 }
             }
@@ -331,6 +339,13 @@ export component CapsuleWindow inherits Window {
         width: 2px; height: 40px; border-radius: 1px;
         background: @linear-gradient(180deg, #a3f5d400 0%, #a3f5d4 50%, #a3f5d400 100%);
         opacity: 3 * root.motion * (1 - root.motion);
+    }
+    context := ContextMenuArea {
+        enabled: root.revealed;
+        Menu {
+            MenuItem { title: "设置"; activated => { root.open-settings(); } }
+            MenuItem { title: "退出"; activated => { root.exit-app(); } }
+        }
     }
 }
 

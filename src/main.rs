@@ -194,42 +194,6 @@ fn remember_mini(mini: &MiniWindow, prefs: &Rc<RefCell<Preferences>>) {
     }
 }
 
-// Keep a short double-click confirmation window instead of making every
-// single click wait for a potentially very slow Windows accessibility setting.
-fn icon_double_click_time() -> Duration {
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime;
-    Duration::from_millis(unsafe { GetDoubleClickTime() }.clamp(100, 200) as u64)
-}
-
-#[derive(Clone, Default)]
-struct IconClicks {
-    generation: Rc<Cell<u64>>,
-    first_click: Rc<Cell<Option<Instant>>>,
-}
-
-impl IconClicks {
-    // Some(generation) = postpone single click; None = double click.
-    fn register(&self, at: Instant, interval: Duration) -> Option<u64> {
-        let second = self
-            .first_click
-            .get()
-            .is_some_and(|first| at.duration_since(first) <= interval);
-        let generation = self.generation.get().wrapping_add(1);
-        self.generation.set(generation);
-        self.first_click.set(if second { None } else { Some(at) });
-        (!second).then_some(generation)
-    }
-
-    fn pending(&self, generation: u64) -> bool {
-        self.generation.get() == generation && self.first_click.get().is_some()
-    }
-
-    fn cancel(&self) {
-        self.generation.set(self.generation.get().wrapping_add(1));
-        self.first_click.set(None);
-    }
-}
-
 // One generation covers both windows, so a reversed handoff cannot be hidden
 // or re-revealed by timers left over from the previous direction.
 #[derive(Clone, Default)]
@@ -624,6 +588,15 @@ fn qa_entry_frame(window: &slint::Window, name: &str) -> usize {
 
 #[cfg(debug_assertions)]
 fn qa_entry_animation(mini: &MiniWindow, capsule: &CapsuleWindow, settings: &SettingsWindow) {
+    // Warm the renderer before measuring the resting silhouette. A hidden or
+    // occluded Windows test surface may otherwise render its first frame only
+    // when take_snapshot() is first called, starting from the reveal's zero.
+    let warm = mini.as_weak();
+    Timer::single_shot(Duration::from_millis(150), move || {
+        if let Some(mini) = warm.upgrade() {
+            let _ = mini.window().take_snapshot();
+        }
+    });
     let m = mini.as_weak();
     let c = capsule.as_weak();
     let s = settings.as_weak();
@@ -772,6 +745,118 @@ fn qa_entry_close(
     });
 }
 
+#[cfg(debug_assertions)]
+fn qa_context_command(window: &slint::Window, x: f32, y: f32, row: usize) {
+    use slint::platform::{PointerEventButton, WindowEvent};
+    // Windows native menus run their own modal message loop. Send test keys
+    // only to this component's HWND, without touching the desktop foreground.
+    let hwnd = platform_windows::native_window(window).unwrap() as usize;
+    let driver = std::thread::spawn(move || {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_KEYDOWN, WM_KEYUP};
+        std::thread::sleep(Duration::from_millis(100));
+        let keys = if row == 0 {
+            vec![0x1b]
+        } else {
+            std::iter::repeat_n(0x28, row).chain([0x0d]).collect()
+        };
+        for key in keys {
+            unsafe {
+                PostMessageW(hwnd as _, WM_KEYDOWN, key, 1);
+                PostMessageW(hwnd as _, WM_KEYUP, key, 1);
+            }
+        }
+    });
+    let position = slint::LogicalPosition::new(x, y);
+    window.dispatch_event(WindowEvent::PointerMoved { position });
+    window.dispatch_event(WindowEvent::PointerPressed {
+        position,
+        button: PointerEventButton::Right,
+    });
+    window.dispatch_event(WindowEvent::PointerReleased {
+        position,
+        button: PointerEventButton::Right,
+    });
+    driver.join().unwrap();
+}
+
+#[cfg(debug_assertions)]
+fn qa_menu_actions<C: ComponentHandle + 'static>(
+    entry: &C,
+    settings: &SettingsWindow,
+    point: (f32, f32),
+    exits: Rc<Cell<i32>>,
+    done: impl FnOnce() + 'static,
+) {
+    qa_context_command(entry.window(), point.0, point.1, 1);
+    let entry = entry.as_weak();
+    let settings = settings.as_weak();
+    Timer::single_shot(Duration::from_millis(50), move || {
+        let view = entry.upgrade().unwrap();
+        let settings_view = settings.upgrade().unwrap();
+        assert!(
+            settings_view.window().is_visible(),
+            "First menu item must open settings"
+        );
+        let _ = settings_view.hide();
+        let before = exits.get();
+        qa_context_command(view.window(), point.0, point.1, 2);
+        Timer::single_shot(Duration::from_millis(50), move || {
+            let _ = entry.upgrade().unwrap();
+            assert_eq!(exits.get(), before + 1, "Second menu item must invoke exit");
+            done();
+        });
+    });
+}
+
+#[cfg(debug_assertions)]
+fn qa_entry_controls(mini: &MiniWindow, capsule: &CapsuleWindow, settings: &SettingsWindow) {
+    let exits = Rc::new(Cell::new(0));
+    let captured = exits.clone();
+    mini.on_exit_app(move || captured.set(captured.get() + 1));
+    let captured = exits.clone();
+    capsule.on_exit_app(move || captured.set(captured.get() + 1));
+    let m = mini.as_weak();
+    let c = capsule.as_weak();
+    let s = settings.as_weak();
+    Timer::single_shot(Duration::from_millis(230), move || {
+        let mini = m.upgrade().unwrap();
+        let capsule = c.upgrade().unwrap();
+        qa_click(mini.window(), 33.0, 33.0);
+        assert!(
+            capsule.window().is_visible(),
+            "Left click must show the capsule synchronously"
+        );
+        assert!(
+            !s.upgrade().unwrap().window().is_visible(),
+            "Left click must not open settings"
+        );
+        Timer::single_shot(Duration::from_millis(240), move || {
+            let capsule = c.upgrade().unwrap();
+            let settings = s.upgrade().unwrap();
+            let x = capsule.window().size().width as f32 / capsule.window().scale_factor() / 2.0;
+            let m2 = m.clone();
+            let c2 = c.clone();
+            let s2 = s.clone();
+            let exits2 = exits.clone();
+            qa_menu_actions(&capsule, &settings, (x, 100.0), exits, move || {
+                let capsule = c2.upgrade().unwrap();
+                qa_click(capsule.window(), x, 49.0);
+                assert!(
+                    m2.upgrade().unwrap().window().is_visible(),
+                    "Left click must show Mini synchronously"
+                );
+                Timer::single_shot(Duration::from_millis(240), move || {
+                    let mini = m2.upgrade().unwrap();
+                    let settings = s2.upgrade().unwrap();
+                    qa_menu_actions(&mini, &settings, (33.0, 33.0), exits2, move || {
+                        eprintln!("WACU_QA entry_immediate_menu_pass");
+                    });
+                });
+            });
+        });
+    });
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let initial = state::load();
     #[cfg(not(debug_assertions))]
@@ -859,8 +944,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let dragging = Rc::new(Cell::new(false));
     let detail_motion = DetailMotion::default();
     let entry_motion = EntryMotion::default();
-    let mini_clicks = IconClicks::default();
-    let capsule_clicks = IconClicks::default();
 
     let capsule = CapsuleWindow::new()?;
     let mini = MiniWindow::new()?;
@@ -893,36 +976,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         });
     }
-    {
-        let weak = mini.as_weak();
-        let setting = settings.as_weak();
-        let clicks = mini_clicks.clone();
-        mini.on_icon_clicked(move || {
-            let delay = icon_double_click_time();
-            if let Some(generation) = clicks.register(Instant::now(), delay) {
-                let weak = weak.clone();
-                let clicks = clicks.clone();
-                Timer::single_shot(delay, move || {
-                    if clicks.pending(generation) {
-                        if let Some(mini) = weak.upgrade() {
-                            if mini.window().is_visible() && mini.get_revealed() {
-                                mini.invoke_toggle_expanded();
-                            }
-                        }
-                        clicks.cancel();
-                    }
-                });
-            } else if let Some(settings) = setting.upgrade() {
-                show_settings(&settings);
-            }
-        });
-    }
+
     {
         let weak = mini.as_weak();
         let prefs = preferences.clone();
-        let clicks = mini_clicks.clone();
         mini.on_start_drag(move || {
-            clicks.cancel();
             let weak = weak.clone();
             let prefs = prefs.clone();
             Timer::single_shot(Duration::from_millis(15), move || {
@@ -936,9 +994,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     {
         let weak = settings.as_weak();
-        let clicks = mini_clicks.clone();
         mini.on_open_settings(move || {
-            clicks.cancel();
             if let Some(s) = weak.upgrade() {
                 show_settings(&s);
             }
@@ -966,6 +1022,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         });
     }
+    mini.on_exit_app(|| {
+        let _ = slint::quit_event_loop();
+    });
+    capsule.on_exit_app(|| {
+        let _ = slint::quit_event_loop();
+    });
     {
         settings.on_exit_app(|| {
             let _ = slint::quit_event_loop();
@@ -1029,37 +1091,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             let _ = slint::quit_event_loop();
         });
     }
-    {
-        let weak = capsule.as_weak();
-        let setting = settings.as_weak();
-        let clicks = capsule_clicks.clone();
-        capsule.on_icon_clicked(move || {
-            let delay = icon_double_click_time();
-            if let Some(generation) = clicks.register(Instant::now(), delay) {
-                let weak = weak.clone();
-                let clicks = clicks.clone();
-                Timer::single_shot(delay, move || {
-                    if clicks.pending(generation) {
-                        if let Some(capsule) = weak.upgrade() {
-                            if capsule.window().is_visible() && capsule.get_revealed() {
-                                capsule.invoke_collapse_to_mini();
-                            }
-                        }
-                        clicks.cancel();
-                    }
-                });
-            } else if let Some(settings) = setting.upgrade() {
-                show_settings(&settings);
-            }
-        });
-    }
+
     {
         let weak = settings.as_weak();
         let preview = startup_preview.clone();
-        let clicks = capsule_clicks.clone();
         capsule.on_open_settings(move || {
             preview.set(false);
-            clicks.cancel();
             if let Some(s) = weak.upgrade() {
                 show_settings(&s);
             }
@@ -1073,9 +1110,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let last_open = last_popup_open.clone();
         let detail_weak = detail.as_weak();
         let motion = detail_motion.clone();
-        let clicks = capsule_clicks.clone();
         capsule.on_start_drag(move || {
-            clicks.cancel();
             preview.set(false);
             active_drag.set(true);
             if let Some(c) = weak.upgrade() {
@@ -1823,131 +1858,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         match qa_view.as_str() {
             "mini" => {
-                if std::env::var_os("WACU_QA_ICON_CLICKS").is_some() {
-                    let m = mini.as_weak();
-                    let c = capsule.as_weak();
-                    let s = settings.as_weak();
-                    Timer::single_shot(Duration::from_millis(230), move || {
-                        let mini = m.upgrade().unwrap();
-                        let capsule = c.upgrade().unwrap();
-                        let settings = s.upgrade().unwrap();
-                        qa_click(mini.window(), 33.0, 33.0);
-                        qa_click(mini.window(), 33.0, 33.0);
-                        assert!(
-                            settings.window().is_visible(),
-                            "Mini double click must open settings"
-                        );
-                        assert!(
-                            !capsule.window().is_visible(),
-                            "Double click must not expand"
-                        );
-                        let m = mini.as_weak();
-                        let c = capsule.as_weak();
-                        let s = settings.as_weak();
-                        Timer::single_shot(
-                            icon_double_click_time() + Duration::from_millis(75),
-                            move || {
-                                let mini = m.upgrade().unwrap();
-                                let capsule = c.upgrade().unwrap();
-                                let settings = s.upgrade().unwrap();
-                                assert!(
-                                    !capsule.window().is_visible(),
-                                    "Pending Mini single click leaked after double click"
-                                );
-                                let _ = settings.hide();
-                                mini.invoke_toggle_expanded();
-                                let m = mini.as_weak();
-                                let c = capsule.as_weak();
-                                let s = settings.as_weak();
-                                Timer::single_shot(Duration::from_millis(470), move || {
-                                    let mini = m.upgrade().unwrap();
-                                    let capsule = c.upgrade().unwrap();
-                                    let settings = s.upgrade().unwrap();
-                                    assert!(capsule.get_revealed());
-                                    let x = capsule.window().size().width as f32
-                                        / capsule.window().scale_factor() as f32
-                                        / 2.0;
-                                    qa_click(capsule.window(), x, 49.0);
-                                    qa_click(capsule.window(), x, 49.0);
-                                    assert!(
-                                        settings.window().is_visible(),
-                                        "Capsule avatar double click must open settings"
-                                    );
-                                    let m = mini.as_weak();
-                                    let c = capsule.as_weak();
-                                    let s = settings.as_weak();
-                                    Timer::single_shot(
-                                        icon_double_click_time() + Duration::from_millis(70),
-                                        move || {
-                                            let mini = m.upgrade().unwrap();
-                                            let capsule = c.upgrade().unwrap();
-                                            let settings = s.upgrade().unwrap();
-                                            assert!(
-                                                capsule.window().is_visible()
-                                                    && capsule.get_revealed(),
-                                                "Double click must not collapse"
-                                            );
-                                            assert!(
-                                                !mini.window().is_visible(),
-                                                "Double click must not restore Mini"
-                                            );
-                                            let _ = settings.hide();
-                                            let x = capsule.window().size().width as f32
-                                                / capsule.window().scale_factor() as f32
-                                                / 2.0;
-                                            qa_click(capsule.window(), x, 49.0);
-                                            let m = mini.as_weak();
-                                            let c = capsule.as_weak();
-                                            Timer::single_shot(
-                                                icon_double_click_time()
-                                                    + Duration::from_millis(420),
-                                                move || {
-                                                    let mini = m.upgrade().unwrap();
-                                                    let capsule = c.upgrade().unwrap();
-                                                    assert!(
-                                                        mini.window().is_visible(),
-                                                        "Capsule single click must restore Mini"
-                                                    );
-                                                    assert!(
-                                                        !capsule.window().is_visible(),
-                                                        "Capsule single click must finish hiding"
-                                                    );
-                                                    qa_click(mini.window(), 33.0, 33.0);
-                                                    let clicked_at = Instant::now();
-                                                    let m = mini.as_weak();
-                                                    let c = capsule.as_weak();
-                                                    Timer::single_shot(
-                                                        Duration::from_millis(240),
-                                                        move || {
-                                                            let mini = m.upgrade().unwrap();
-                                                            let capsule = c.upgrade().unwrap();
-                                                            assert!(
-                                                                capsule.window().is_visible(),
-                                                                "Mini single click must expand within 240ms"
-                                                            );
-                                                            assert!(
-                                                                capsule.get_revealed(),
-                                                                "Single click must start the animation within 240ms"
-                                                            );
-                                                            eprintln!(
-                                                                "WACU_QA icon_response_pass probe_ms={}",
-                                                                clicked_at.elapsed().as_millis()
-                                                            );
-                                                            capsule.invoke_collapse_to_mini();
-                                                            eprintln!(
-                                                                "WACU_QA icon_single_double_pass"
-                                                            );
-                                                            let _ = mini;
-                                                        },
-                                                    );
-                                                },
-                                            );
-                                        },
-                                    );
-                                });
-                            },
-                        );
-                    });
+                if std::env::var_os("WACU_QA_ENTRY_CONTROLS").is_some() {
+                    qa_entry_controls(&mini, &capsule, &settings);
                 }
                 if std::env::var_os("WACU_QA_ENTRY_MOTION").is_some() {
                     qa_entry_animation(&mini, &capsule, &settings);
@@ -2099,24 +2011,17 @@ fn main() -> Result<(), Box<dyn Error>> {
                             assert_eq!(calls.get(), 1, "Mini drag threshold failed");
                             assert!(m.window().is_visible(), "Drag must not expand the capsule");
                             m.set_dragging(false);
-                            // Right click provides settings without needing the tray.
-                            m.window().dispatch_event(WindowEvent::PointerPressed {
-                                position: start,
-                                button: PointerEventButton::Right,
-                            });
-                            m.window().dispatch_event(WindowEvent::PointerReleased {
-                                position: start,
-                                button: PointerEventButton::Right,
-                            });
+                            qa_context_command(m.window(), 33.0, 33.0, 0);
                             assert!(
-                                settings.window().is_visible(),
-                                "Mini right click must show settings"
+                                !settings.window().is_visible(),
+                                "Right click must open the menu without opening settings"
                             );
                             assert!(m.window().is_visible(), "Right click must keep Mini open");
                             assert!(
                                 !c.window().is_visible(),
                                 "Right click must not expand capsule"
                             );
+                            m.invoke_close_menu();
                             eprintln!("WACU_QA mini_toggle_drag_settings_pass");
                         });
                     });
@@ -2286,8 +2191,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         let c = capsule.as_weak();
         let d = detail.as_weak();
         let s = settings.as_weak();
-        let snapshot_delay = if std::env::var_os("WACU_QA_ICON_CLICKS").is_some() {
-            6000
+        let snapshot_delay = if std::env::var_os("WACU_QA_ENTRY_CONTROLS").is_some() {
+            3500
         } else if std::env::var_os("WACU_QA_ENTRY_MOTION").is_some() {
             2600
         } else if std::env::var_os("WACU_QA_DETAIL_FADE").is_some() {
@@ -2473,50 +2378,6 @@ fn main() -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn icon_clicks_distinguish_single_double_and_cancel() {
-        let clicks = IconClicks::default();
-        let other_icon = IconClicks::default();
-        let start = Instant::now();
-        let interval = Duration::from_millis(200);
-        let first = clicks.register(start, interval).unwrap();
-        assert!(clicks.pending(first));
-        assert_eq!(
-            clicks.register(start + Duration::from_millis(180), interval),
-            None
-        );
-        assert!(
-            !clicks.pending(first),
-            "Double-click must cancel pending toggle"
-        );
-
-        let next = clicks
-            .register(start + Duration::from_millis(800), interval)
-            .unwrap();
-        assert!(clicks.pending(next));
-        assert!(
-            other_icon
-                .register(start + Duration::from_millis(810), interval)
-                .is_some()
-        );
-        clicks.cancel();
-        assert!(
-            !clicks.pending(next),
-            "Right-click/drag should cancel queued toggle"
-        );
-
-        let later = clicks
-            .register(start + Duration::from_millis(1500), interval)
-            .unwrap();
-        assert!(clicks.pending(later));
-        assert_eq!(
-            clicks
-                .register(start + Duration::from_millis(2001), interval)
-                .is_some(),
-            true
-        );
-    }
 
     #[test]
     fn mini_and_capsule_defaults_are_independent() {

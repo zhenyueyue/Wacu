@@ -7,7 +7,7 @@ $configPath = Join-Path $env:APPDATA 'Wacu\preferences.json'
 $configBefore = if (Test-Path -LiteralPath $configPath) { (Get-FileHash -LiteralPath $configPath).Hash } else { $null }
 $cases = @(
     @{ View = 'mini'; Name = 'mini'; Count = 3; MiniInput = 1 },
-    @{ View = 'mini'; Name = 'mini-icon-clicks'; Count = 3; IconClicks = 1 },
+    @{ View = 'mini'; Name = 'entry-controls'; Count = 3; EntryControls = 1 },
     @{ View = 'mini'; Name = 'mini-independent-positions'; Count = 3; MiniPositions = 1 },
     @{ View = 'capsule'; Name = 'capsule'; Count = 3 },
     @{ View = 'capsule'; Name = 'capsule-compact'; Count = 3; Size = 0 },
@@ -49,8 +49,8 @@ foreach ($case in $cases) {
     if ($case.DragDetail) { $start.Environment['WACU_QA_DRAG_DETAIL'] = '1' }
     if ($case.DetailFade) { $start.Environment['WACU_QA_DETAIL_FADE'] = '1' }
     if ($case.MiniInput) { $start.Environment['WACU_QA_MINI_INPUT'] = '1' }
-    if ($case.IconClicks) {
-        $start.Environment['WACU_QA_ICON_CLICKS'] = '1'
+    if ($case.EntryControls) {
+        $start.Environment['WACU_QA_ENTRY_CONTROLS'] = '1'
         $start.Environment['APPDATA'] = Join-Path $root 'target\qa-icon-click-profile'
     }
     if ($case.MiniPositions) {
@@ -77,7 +77,7 @@ foreach ($case in $cases) {
     }
     if ($case.Input -and $diagnostics -notmatch 'WACU_QA input_pass') { throw ('输入检查未通过: ' + $diagnostics) }
     if ($case.MiniInput -and $diagnostics -notmatch 'WACU_QA mini_toggle_drag_settings_pass') { throw ('Mini 交互检查未通过: ' + $diagnostics) }
-    if ($case.IconClicks -and ($diagnostics -notmatch 'WACU_QA icon_single_double_pass' -or $diagnostics -notmatch 'WACU_QA icon_response_pass')) { throw ('Mini/胶囊头像单双击或响应时间检查未通过: ' + $diagnostics) }
+    if ($case.EntryControls -and $diagnostics -notmatch 'WACU_QA entry_immediate_menu_pass') { throw ('左键即时切换或右键菜单检查未通过: ' + $diagnostics) }
     if ($case.MiniPositions -and $diagnostics -notmatch 'WACU_QA mini_independent_positions_pass') { throw ('Mini/胶囊独立位置检查未通过: ' + $diagnostics) }
     if ($case.DragDetail -and $diagnostics -notmatch 'WACU_QA detail_hide_restore_pass') {
         throw ('详情拖动恢复检查未通过: ' + $diagnostics)
