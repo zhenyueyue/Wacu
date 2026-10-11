@@ -32,7 +32,7 @@ foreach ($count in $Counts) {
                 Copy-Item -LiteralPath (Join-Path $taskRoot "target\qa-entry-$($window.name).png") -Destination (Join-Path $destination "$($window.name).png") -Force
             } }
         }
-        Write-Output "跨位置通过: 服务数 $count / 路径 $direction；实际移动帧、独立坐标、快速反向、穿透与动画开关"
+        Write-Output "跨位置通过: 服务数 $count / 路径 $direction；两端同步帧、独立坐标、任务栏排除、快速反向与动画开关"
     }
 }
 $after = if (Test-Path -LiteralPath $configPath) { (Get-FileHash -LiteralPath $configPath).Hash } else { $null }

@@ -23,12 +23,12 @@ for count in range(4):
         for window in scene['windows']:
             frame = Image.open(directory / (window['name'] + '.png')).convert('RGBA')
             canvas.alpha_composite(frame, (window['x'] - left, window['y'] - top + 40))
-        ImageDraw.Draw(canvas).text((16, 8), f'{count} 个额度环 · 异位展开与收起 · 2 倍慢放', font=font, fill='#e4e4e7')
+        ImageDraw.Draw(canvas).text((16, 8), f'{count} 个额度环 · 双端圆环接力 · 2 倍慢放', font=font, fill='#e4e4e7')
         frames.append(canvas.convert('RGB'))
         interval = scenes[index + 1]['time'] - scene['time'] if index + 1 < len(scenes) else 400
         durations.append(max(20, round(interval * 2 / 10) * 10))
     durations[0] = max(350, durations[0])
-    output = root / 'docs' / 'screenshots' / f'entry-handoff-count-{count}.gif'
+    output = root / 'docs' / 'screenshots' / f'entry-relay-count-{count}.gif'
     frames[0].save(output, save_all=True, append_images=frames[1:], duration=durations, loop=0, disposal=2)
     with Image.open(output) as animation:
         assert animation.n_frames >= 14, 'Native preview must contain distinct intermediate frames'

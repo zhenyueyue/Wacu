@@ -12,24 +12,6 @@ pub struct WorkArea {
     pub bottom: i32,
 }
 
-pub fn handoff_point(from: Point, to: Point, progress: f32) -> Point {
-    let p = progress.clamp(0.0, 1.0) as f64;
-    let t = p * p * (3.0 - 2.0 * p);
-    let dx = to.x as f64 - from.x as f64;
-    let dy = to.y as f64 - from.y as f64;
-    let distance = dx.hypot(dy);
-    let bend = (distance * 0.08).min(60.0) * 4.0 * t * (1.0 - t);
-    let (nx, ny) = if distance > 0.0 {
-        (-dy / distance, dx / distance)
-    } else {
-        (0.0, 0.0)
-    };
-    Point {
-        x: (from.x as f64 + dx * t + nx * bend).round() as i32,
-        y: (from.y as f64 + dy * t + ny * bend).round() as i32,
-    }
-}
-
 pub fn constrain(position: Point, size: (i32, i32), area: WorkArea) -> Point {
     Point {
         x: position
@@ -95,24 +77,6 @@ pub fn edge_position(
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn handoff_endpoints_and_negative_monitor_coordinates() {
-        let from = Point { x: -1700, y: 900 };
-        let to = Point { x: 2300, y: -100 };
-        assert_eq!(handoff_point(from, to, 0.0), from);
-        assert_eq!(handoff_point(from, to, 1.0), to);
-        assert_eq!(handoff_point(from, to, -1.0), from);
-        assert_eq!(handoff_point(from, to, 2.0), to);
-        assert_eq!(handoff_point(from, from, 0.5), from);
-        for step in 0..=100 {
-            let point = handoff_point(from, to, step as f32 / 100.0);
-            let distance_from_line = (((point.x - from.x) as f64 * -1000.0
-                - (point.y - from.y) as f64 * 4000.0)
-                / 4000.0_f64.hypot(1000.0))
-            .abs();
-            assert!(distance_from_line <= 61.0);
-        }
-    }
     #[test]
     fn shared_position_stays_on_screen_after_resize() {
         let a = WorkArea {

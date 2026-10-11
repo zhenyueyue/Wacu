@@ -11,14 +11,70 @@ use windows_sys::Win32::{
     UI::Input::KeyboardAndMouse::ReleaseCapture,
     UI::Shell::ShellExecuteW,
     UI::WindowsAndMessaging::{
-        GWL_EXSTYLE, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect,
-        HTCAPTION, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW,
-        SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, WM_NCLBUTTONDOWN, WS_EX_APPWINDOW,
-        WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
+        CreateWindowExW, DestroyWindow, GWL_EXSTYLE, GetCursorPos, GetForegroundWindow,
+        GetWindowLongPtrW, GetWindowRect, HTCAPTION, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE,
+        SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
+        WM_NCLBUTTONDOWN, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
     },
 };
 
 use crate::placement::{Point, WorkArea};
+
+// A permanently hidden owner makes every Wacu window a utility window from
+// creation, before the first show or any backend visibility/style changes.
+pub struct UtilityOwner(HWND);
+
+impl UtilityOwner {
+    pub fn new() -> Result<Self, String> {
+        let hwnd = unsafe {
+            CreateWindowExW(
+                WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                wide("STATIC").as_ptr(),
+                wide("Wacu Utility Owner").as_ptr(),
+                WS_POPUP,
+                0,
+                0,
+                0,
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            )
+        };
+        if hwnd.is_null() {
+            Err("无法创建 Wacu 隐藏窗口所有者".into())
+        } else {
+            Ok(Self(hwnd))
+        }
+    }
+
+    pub fn handle(&self) -> HWND {
+        self.0
+    }
+}
+
+impl Drop for UtilityOwner {
+    fn drop(&mut self) {
+        unsafe {
+            DestroyWindow(self.0);
+        }
+    }
+}
+
+#[cfg(debug_assertions)]
+pub fn utility_window_is_taskbar_excluded(window: &slint::Window) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GW_OWNER, GetWindow, IsWindowVisible};
+    let Some(hwnd) = native_window(window) else {
+        return false;
+    };
+    unsafe {
+        let owner = GetWindow(hwnd, GW_OWNER);
+        !owner.is_null()
+            && IsWindowVisible(owner) == 0
+            && GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_APPWINDOW as isize == 0
+    }
+}
 
 pub fn cursor() -> Point {
     let mut point = POINT { x: 0, y: 0 };
@@ -104,11 +160,11 @@ pub fn configure_capsule(window: &slint::Window) {
     };
     unsafe {
         let existing = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        SetWindowLongPtrW(
-            hwnd,
-            GWL_EXSTYLE,
-            (existing | WS_EX_TOOLWINDOW as isize) & !(WS_EX_APPWINDOW as isize),
-        );
+        let desired = (existing | WS_EX_TOOLWINDOW as isize) & !(WS_EX_APPWINDOW as isize);
+        if desired == existing {
+            return;
+        }
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, desired);
         SetWindowPos(
             hwnd,
             std::ptr::null_mut(),
@@ -118,20 +174,6 @@ pub fn configure_capsule(window: &slint::Window) {
             0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
         );
-    }
-}
-
-pub fn configure_transit(window: &slint::Window) {
-    configure_capsule(window);
-    if let Some(hwnd) = native_window(window) {
-        unsafe {
-            let existing = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-            SetWindowLongPtrW(
-                hwnd,
-                GWL_EXSTYLE,
-                existing | WS_EX_NOACTIVATE as isize | WS_EX_TRANSPARENT as isize,
-            );
-        }
     }
 }
 
