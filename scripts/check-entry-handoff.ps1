@@ -17,8 +17,14 @@ foreach ($count in $Counts) {
         $start.Environment['WACU_QA_EXIT'] = '1'
         $start.Environment['APPDATA'] = Join-Path $taskRoot "target\qa-handoff-profile-$count-$direction"
         $process = [System.Diagnostics.Process]::Start($start)
-        if (!$process.WaitForExit(30000)) { $process.Kill(); throw '跨位置动画检查超时' }
-        $diagnostics = $process.StandardError.ReadToEnd()
+        $errors = $process.StandardError.ReadToEndAsync()
+        if (!$process.WaitForExit(30000)) {
+            $process.Kill()
+            $process.WaitForExit()
+            throw "跨位置动画检查超时 ($count / $direction): $($errors.GetAwaiter().GetResult())"
+        }
+        $diagnostics = $errors.GetAwaiter().GetResult()
+        if ($env:WACU_QA_FLOW_DESKTOP) { Write-Output $diagnostics }
         if ($process.ExitCode -ne 0 -or $diagnostics -notmatch 'entry_handoff_pass') {
             throw "跨位置动画失败 ($count / $direction, exit=$($process.ExitCode)): $diagnostics"
         }
@@ -32,7 +38,7 @@ foreach ($count in $Counts) {
                 Copy-Item -LiteralPath (Join-Path $taskRoot "target\qa-entry-$($window.name).png") -Destination (Join-Path $destination "$($window.name).png") -Force
             } }
         }
-        Write-Output "跨位置通过: 服务数 $count / 路径 $direction；两端同步帧、独立坐标、任务栏排除、快速反向与动画开关"
+        Write-Output "跨位置通过: 服务数 $count / 路径 $direction；分路汇入 Logo、独立坐标、穿透绘制层、任务栏排除、快速反向与动画开关"
     }
 }
 $after = if (Test-Path -LiteralPath $configPath) { (Get-FileHash -LiteralPath $configPath).Hash } else { $null }

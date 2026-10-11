@@ -19,6 +19,32 @@ export struct Service {
     accent: color, arc: string, glow: image, visible: bool,
 }
 
+export struct FlowStroke { path: string, accent: color, strength: float }
+
+export component LineFlowWindow inherits Window {
+    title: "Wacu Line Flow"; background: transparent; no-frame: true; always-on-top: true;
+    in property <float> canvas-width: 128;
+    in property <float> canvas-height: 128;
+    in property <float> line-width: 2.8;
+    in property <[FlowStroke]> strokes;
+    width: root.canvas-width * 1px; height: root.canvas-height * 1px;
+    for stroke in root.strokes: Rectangle {
+        width: root.width; height: root.height; background: transparent;
+        Path {
+            width: parent.width; height: parent.height;
+            viewbox-width: root.canvas-width; viewbox-height: root.canvas-height;
+            commands: stroke.path; stroke: stroke.accent; stroke-width: root.line-width * 2px;
+            stroke-line-cap: round; fill: transparent; opacity: stroke.strength * 0.14;
+        }
+        Path {
+            width: parent.width; height: parent.height;
+            viewbox-width: root.canvas-width; viewbox-height: root.canvas-height;
+            commands: stroke.path; stroke: stroke.accent; stroke-width: root.line-width * 1px;
+            stroke-line-cap: round; fill: transparent; opacity: stroke.strength;
+        }
+    }
+}
+
 component Glyph inherits Image {
     in property <float> ui-scale: Tokens.panel-scale;
     width: 20px * root.ui-scale; height: 20px * root.ui-scale; image-fit: contain;
@@ -242,11 +268,14 @@ export component MiniWindow inherits Window {
     icon: @image-url("../assets/app-icon.png");
     in property <bool> animated: true;
     in property <[Service]> services;
+    in property <bool> flow-active: false;
+    in property <bool> external-rings: false;
+    in property <float> flow-reveal: 0;
     pure callback render-trail(float, float) -> string;
     in-out property <bool> revealed: false;
-    out property <float> reveal-progress: root.revealed ? 1 : 0;
+    out property <float> reveal-progress: root.flow-active ? root.flow-reveal : (root.revealed ? 1 : 0);
     animate reveal-progress {
-        duration: root.animated ? (root.revealed ? 180ms : 100ms) : 0ms;
+        duration: root.animated && !root.flow-active ? (root.revealed ? 180ms : 100ms) : 0ms;
         easing: root.revealed ? cubic-bezier(0.18, 0.9, 0.25, 1.12) : cubic-bezier(0.4, 0, 0.2, 1);
     }
     property <float> rim-progress: root.revealed ? 1 : 0;
@@ -286,11 +315,11 @@ export component MiniWindow inherits Window {
         x: (root.width - self.width) / 2; y: (root.height - self.height) / 2;
         width: 58px * (0.90 + 0.10 * clamp(root.reveal-progress, 0, 1)); height: self.width;
         services: root.services; turn: 1 - root.rim-progress;
-        strength: 4 * root.rim-progress * (1 - root.rim-progress);
+        strength: root.external-rings ? 0 : 4 * root.rim-progress * (1 - root.rim-progress);
         render-trail(start, span) => { return root.render-trail(start, span); }
     }
     touch := TouchArea {
-        enabled: root.revealed;
+        enabled: root.revealed && root.reveal-progress > 0.25;
         width: parent.width; height: parent.height;
         mouse-cursor: pointer;
         pointer-event(event) => {
@@ -334,18 +363,23 @@ export component CapsuleWindow inherits Window {
     in property <int> visible-count: 3;
     in-out property <int> selected-index: -1;
     in-out property <bool> revealed: false;
+    in property <bool> flow-controlled: false;
+    in property <bool> external-rings: false;
+    in property <float> flow-progress: 0;
+    in property <float> flow-reveal: 0;
+    in property <float> flow-visibility: 0;
     // The native window stays fixed; only the surface unfolds from its logo.
-    out property <float> reveal-progress: root.revealed ? 1 : 0;
+    out property <float> reveal-progress: root.flow-controlled ? root.flow-reveal : (root.revealed ? 1 : 0);
     animate reveal-progress {
-        duration: root.animated ? 180ms : 0ms;
+        duration: root.animated && !root.flow-controlled ? 180ms : 0ms;
         easing: root.revealed ? cubic-bezier(0.22, 1, 0.36, 1) : cubic-bezier(0.4, 0, 0.2, 1);
     }
     property <float> motion: clamp(root.reveal-progress, 0, 1);
-    property <float> visibility: clamp(max(root.motion * 4, root.ring-progress * 10), 0, 1);
+    property <float> visibility: root.flow-controlled ? root.flow-visibility : clamp(max(root.motion * 4, root.ring-progress * 10), 0, 1);
     // The existing quota rings share one reversible timeline with the shell.
-    out property <float> ring-progress: root.revealed ? 1 : 0;
+    out property <float> ring-progress: root.flow-controlled ? root.flow-progress : (root.revealed ? 1 : 0);
     animate ring-progress {
-        duration: root.animated ? (root.revealed ? 420ms : 320ms) : 0ms;
+        duration: root.animated && !root.flow-controlled ? (root.revealed ? 420ms : 320ms) : 0ms;
         easing: linear;
     }
     pure callback render-arc(float) -> string;
@@ -517,7 +551,7 @@ export component CapsuleWindow inherits Window {
         width: root.logo-size + 8px; height: self.width; x: (root.width - self.width) / 2;
         y: surface.y + root.logo-top + root.logo-size / 2 - self.height / 2;
         services: root.services; turn: root.ring-progress;
-        strength: (1 - clamp(root.ring-progress / 0.36, 0, 1)) * root.visibility;
+        strength: root.external-rings ? 0 : (1 - clamp(root.ring-progress / 0.36, 0, 1)) * root.visibility;
         render-trail(start, span) => { return root.render-trail(start, span); }
     }
 }

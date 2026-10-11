@@ -8,13 +8,14 @@ use windows_sys::Win32::{
         RRF_RT_REG_SZ, RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegGetValueW, RegOpenKeyExW,
         RegSetValueExW,
     },
-    UI::Input::KeyboardAndMouse::ReleaseCapture,
+    UI::Input::KeyboardAndMouse::{EnableWindow, ReleaseCapture},
     UI::Shell::ShellExecuteW,
     UI::WindowsAndMessaging::{
         CreateWindowExW, DestroyWindow, GWL_EXSTYLE, GetCursorPos, GetForegroundWindow,
         GetWindowLongPtrW, GetWindowRect, HTCAPTION, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE,
         SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
-        WM_NCLBUTTONDOWN, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
+        WM_NCLBUTTONDOWN, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
+        WS_POPUP,
     },
 };
 
@@ -186,6 +187,67 @@ pub fn begin_drag(window: &slint::Window) {
         SendMessageW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION as usize, 0);
     }
     release_drag_input(window);
+}
+
+pub fn configure_flow(window: &slint::Window) {
+    use slint::winit_030::WinitWindowAccessor;
+    window.with_winit_window(|native| {
+        let _ = native.set_cursor_hittest(false);
+    });
+    configure_capsule(window);
+    if let Some(hwnd) = native_window(window) {
+        unsafe {
+            let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            SetWindowLongPtrW(
+                hwnd,
+                GWL_EXSTYLE,
+                style | WS_EX_TRANSPARENT as isize | WS_EX_NOACTIVATE as isize,
+            );
+            // Disabled top-level surfaces cannot intercept clicks or activate.
+            // Rendering still proceeds; input goes to the windows beneath.
+            EnableWindow(hwnd, 0);
+        }
+    }
+}
+
+#[cfg(debug_assertions)]
+pub fn flow_is_passthrough(window: &slint::Window) -> bool {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
+    use windows_sys::Win32::UI::WindowsAndMessaging::WindowFromPoint;
+    let Some(hwnd) = native_window(window) else {
+        return false;
+    };
+    let position = window.position();
+    let size = window.size();
+    unsafe {
+        let enabled = IsWindowEnabled(hwnd);
+        let hit = WindowFromPoint(POINT {
+            x: position.x + size.width as i32 / 2,
+            y: position.y + size.height as i32 / 2,
+        });
+        if enabled != 0 || hit == hwnd {
+            eprintln!(
+                "WACU_QA flow hit enabled={enabled} hit_self={} style={:x}",
+                hit == hwnd,
+                GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
+            );
+        }
+        enabled == 0 && hit != hwnd
+    }
+}
+
+#[cfg(debug_assertions)]
+pub fn desktop_colors(points: &[crate::flow::Vector]) -> Vec<u32> {
+    use windows_sys::Win32::Graphics::Gdi::{GetDC, GetPixel, ReleaseDC};
+    unsafe {
+        let dc = GetDC(std::ptr::null_mut());
+        let colors = points
+            .iter()
+            .map(|p| GetPixel(dc, p.x.round() as i32, p.y.round() as i32))
+            .collect();
+        ReleaseDC(std::ptr::null_mut(), dc);
+        colors
+    }
 }
 
 pub fn release_drag_input(window: &slint::Window) {

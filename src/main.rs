@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod flow;
 mod glow;
 mod placement;
 mod platform_windows;
@@ -240,14 +241,220 @@ fn remember_mini(mini: &MiniWindow, prefs: &Rc<RefCell<Preferences>>) {
 
 // One generation covers both windows, so a reversed handoff cannot be hidden
 // or re-revealed by timers left over from the previous direction.
-#[derive(Clone, Default)]
-struct EntryMotion(Rc<Cell<u64>>);
+#[derive(Clone)]
+struct EntryMotion {
+    generation: Rc<Cell<u64>>,
+    active: Rc<Cell<bool>>,
+    progress: Rc<Cell<f64>>,
+    geometry: Rc<RefCell<Option<flow::Geometry>>>,
+    layer: Rc<LineFlowWindow>,
+}
 
 impl EntryMotion {
+    fn new() -> Result<Self, slint::PlatformError> {
+        Ok(Self {
+            generation: Rc::new(Cell::new(0)),
+            active: Rc::new(Cell::new(false)),
+            progress: Rc::new(Cell::new(0.0)),
+            geometry: Rc::new(RefCell::new(None)),
+            layer: Rc::new(LineFlowWindow::new()?),
+        })
+    }
+
     fn next(&self) -> u64 {
-        let generation = self.0.get().wrapping_add(1);
-        self.0.set(generation);
+        let generation = self.generation.get().wrapping_add(1);
+        self.generation.set(generation);
+        self.active.set(false);
+        let _ = self.layer.hide();
+        self.layer.set_strokes(ModelRc::default());
+        *self.geometry.borrow_mut() = None;
         generation
+    }
+
+    fn settle(&self, mini: &MiniWindow, capsule: &CapsuleWindow, open: bool) {
+        self.next();
+        let mini_animated = mini.get_animated();
+        let capsule_animated = capsule.get_animated();
+        mini.set_animated(false);
+        capsule.set_animated(false);
+        self.progress.set(if open { 1.0 } else { 0.0 });
+        mini.set_flow_reveal(if open { 0.0 } else { 1.0 });
+        capsule.set_flow_progress(if open { 1.0 } else { 0.0 });
+        capsule.set_flow_reveal(if open { 1.0 } else { 0.0 });
+        capsule.set_flow_visibility(if open { 1.0 } else { 0.0 });
+        mini.set_revealed(!open);
+        capsule.set_revealed(open);
+        mini.set_flow_active(false);
+        mini.set_external_rings(false);
+        capsule.set_flow_controlled(false);
+        capsule.set_external_rings(false);
+        // Evaluate the terminal bindings with zero duration before restoring
+        // animation: releasing external control must not start another tween
+        // from the last sampled frame to the resting value.
+        let _ = mini.get_reveal_progress();
+        let _ = capsule.get_reveal_progress();
+        let _ = capsule.get_ring_progress();
+        mini.set_animated(mini_animated);
+        capsule.set_animated(capsule_animated);
+        if open {
+            let _ = mini.hide();
+            let _ = capsule.show();
+        } else {
+            let _ = capsule.hide();
+            let _ = mini.show();
+        }
+    }
+
+    fn frame(&self, mini: &MiniWindow, capsule: &CapsuleWindow, progress: f64) {
+        self.progress.set(progress);
+        let geometry = self.geometry.borrow().expect("Active flow geometry");
+        let rail = geometry.rail(progress);
+        mini.set_flow_reveal(geometry.mini_reveal(progress) as f32);
+        capsule.set_flow_progress(rail as f32);
+        capsule.set_flow_reveal(flow::smooth(rail / 0.43) as f32);
+        capsule.set_flow_visibility(geometry.visibility(progress) as f32);
+        if geometry.mini_reveal(progress) == 0.0 && capsule.get_revealed() {
+            let _ = mini.hide();
+        }
+        let services = capsule.get_services();
+        if geometry.spatial() && services.row_count() > 0 && !self.layer.window().is_visible() {
+            self.show_layer(geometry);
+        }
+        let strokes = (0..services.row_count())
+            .filter_map(|index| {
+                let strength = geometry.opacity(services.row_count(), index, progress);
+                if !geometry.spatial() || strength <= 0.001 {
+                    return None;
+                }
+                use std::fmt::Write;
+                let (x, y, _, _) = geometry.bounds();
+                let scale = self.layer.window().scale_factor() as f64;
+                let mut path = String::new();
+                for (i, point) in geometry
+                    .points(services.row_count(), index, progress)
+                    .iter()
+                    .enumerate()
+                {
+                    let _ = write!(
+                        path,
+                        "{} {:.2} {:.2} ",
+                        if i == 0 { "M" } else { "L" },
+                        (point.x - x as f64) / scale,
+                        (point.y - y as f64) / scale
+                    );
+                }
+                Some(FlowStroke {
+                    path: path.into(),
+                    accent: services.row_data(index).unwrap().accent,
+                    strength,
+                })
+            })
+            .collect::<Vec<_>>();
+        self.layer
+            .set_strokes(ModelRc::new(VecModel::from(strokes)));
+    }
+
+    fn show_layer(&self, geometry: flow::Geometry) {
+        let (x, y, width, height) = geometry.bounds();
+        let _ = self.layer.show();
+        self.layer
+            .window()
+            .set_position(PhysicalPosition::new(x, y));
+        let scale = self.layer.window().scale_factor();
+        self.layer.set_canvas_width(width as f32 / scale);
+        self.layer.set_canvas_height(height as f32 / scale);
+        self.layer
+            .set_line_width(2.8 * geometry.source_scale.max(geometry.target_scale) as f32 / scale);
+        self.layer
+            .window()
+            .set_size(slint::PhysicalSize::new(width, height));
+        platform_windows::configure_flow(self.layer.window());
+    }
+
+    fn run(&self, mini: &MiniWindow, capsule: &CapsuleWindow, open: bool) {
+        let from = if self.active.get() {
+            self.progress.get()
+        } else if open {
+            0.0
+        } else {
+            1.0
+        };
+        let generation = self.generation.get().wrapping_add(1);
+        self.generation.set(generation);
+        self.active.set(true);
+        let mini_pos = mini.window().position();
+        let mini_size = mini.window().size();
+        let cap_pos = capsule.window().position();
+        let cap_size = capsule.window().size();
+        let geometry = flow::Geometry {
+            source: flow::Vector {
+                x: mini_pos.x as f64 + mini_size.width as f64 / 2.0,
+                y: mini_pos.y as f64 + mini_size.height as f64 / 2.0,
+            },
+            logo: flow::Vector {
+                x: cap_pos.x as f64 + cap_size.width as f64 / 2.0,
+                y: cap_pos.y as f64
+                    + capsule.get_hero_y() as f64 * capsule.window().scale_factor() as f64,
+            },
+            source_scale: mini.window().scale_factor() as f64,
+            target_scale: capsule.window().scale_factor() as f64,
+        };
+        *self.geometry.borrow_mut() = Some(geometry);
+        mini.set_flow_active(true);
+        mini.set_external_rings(geometry.spatial());
+        capsule.set_flow_controlled(true);
+        capsule.set_external_rings(geometry.spatial());
+        mini.set_revealed(!open);
+        capsule.set_revealed(open);
+        self.frame(mini, capsule, from);
+        let base = match (geometry.spatial(), open) {
+            (true, true) => flow::OPEN_MS,
+            (true, false) => flow::CLOSE_MS,
+            (false, true) => flow::LOCAL_OPEN_MS,
+            (false, false) => flow::LOCAL_CLOSE_MS,
+        };
+        let to = if open { 1.0 } else { 0.0 };
+        let duration = Duration::from_secs_f64(base as f64 / 1000.0 * (to - from).abs());
+        fn step(
+            motion: EntryMotion,
+            mini: slint::Weak<MiniWindow>,
+            capsule: slint::Weak<CapsuleWindow>,
+            generation: u64,
+            from: f64,
+            to: f64,
+            start: Instant,
+            duration: Duration,
+        ) {
+            if motion.generation.get() != generation {
+                return;
+            }
+            let (Some(m), Some(c)) = (mini.upgrade(), capsule.upgrade()) else {
+                return;
+            };
+            let t = if duration.is_zero() {
+                1.0
+            } else {
+                (start.elapsed().as_secs_f64() / duration.as_secs_f64()).min(1.0)
+            };
+            motion.frame(&m, &c, from + (to - from) * t);
+            if t >= 1.0 {
+                motion.settle(&m, &c, to == 1.0);
+            } else {
+                Timer::single_shot(Duration::from_millis(16), move || {
+                    step(motion, mini, capsule, generation, from, to, start, duration)
+                });
+            }
+        }
+        step(
+            self.clone(),
+            mini.as_weak(),
+            capsule.as_weak(),
+            generation,
+            from,
+            to,
+            Instant::now(),
+            duration,
+        );
     }
 }
 
@@ -285,7 +492,7 @@ fn show_mini(mini: &MiniWindow, prefs: &Rc<RefCell<Preferences>>, motion: &Entry
     let weak = mini.as_weak();
     let motion = motion.clone();
     Timer::single_shot(Duration::from_millis(25), move || {
-        if motion.0.get() == generation {
+        if motion.generation.get() == generation {
             if let Some(m) = weak.upgrade() {
                 if m.window().is_visible() {
                     platform_windows::configure_capsule(m.window());
@@ -302,11 +509,16 @@ fn expand_entry(
     prefs: &Rc<RefCell<Preferences>>,
     motion: &EntryMotion,
 ) {
-    let generation = motion.next();
     let pos = mini.window().position();
     remember_mini(mini, prefs);
     remember_entry_view(prefs, EntryView::Capsule);
-    mini.set_revealed(false);
+    // Keep a new target blank until the shared timeline has been installed.
+    if !motion.active.get() {
+        capsule.set_flow_controlled(true);
+        capsule.set_flow_progress(0.0);
+        capsule.set_flow_reveal(0.0);
+        capsule.set_flow_visibility(0.0);
+    }
     let _ = capsule.show();
     let target = capsule_position(
         &prefs.borrow(),
@@ -318,20 +530,11 @@ fn expand_entry(
         .set_position(PhysicalPosition::new(target.x, target.y));
     remember_position(capsule, prefs, None);
     platform_windows::configure_capsule(capsule.window());
-    capsule.set_revealed(true);
     if !capsule.get_animated() {
-        let _ = mini.hide();
+        motion.settle(mini, capsule, true);
         return;
     }
-    let weak = mini.as_weak();
-    let motion = motion.clone();
-    Timer::single_shot(Duration::from_millis(120), move || {
-        if motion.0.get() == generation {
-            if let Some(m) = weak.upgrade() {
-                let _ = m.hide();
-            }
-        }
-    });
+    motion.run(mini, capsule, true);
 }
 
 fn collapse_entry(
@@ -340,36 +543,14 @@ fn collapse_entry(
     prefs: &Rc<RefCell<Preferences>>,
     motion: &EntryMotion,
 ) {
-    let generation = motion.next();
     remember_position(capsule, prefs, None);
     remember_entry_view(prefs, EntryView::Mini);
-    capsule.set_revealed(false);
     prepare_mini(mini, prefs);
     if !capsule.get_animated() {
-        mini.set_revealed(true);
-        let _ = capsule.hide();
+        motion.settle(mini, capsule, false);
         return;
     }
-    // The Mini ring picks up the same colors while the local quota rings are
-    // collecting. Both native windows stay at their own saved coordinates.
-    let weak = mini.as_weak();
-    let gate = motion.clone();
-    Timer::single_shot(Duration::from_millis(140), move || {
-        if gate.0.get() == generation {
-            if let Some(m) = weak.upgrade() {
-                m.set_revealed(true);
-            }
-        }
-    });
-    let weak = capsule.as_weak();
-    let gate = motion.clone();
-    Timer::single_shot(Duration::from_millis(340), move || {
-        if gate.0.get() == generation {
-            if let Some(c) = weak.upgrade() {
-                let _ = c.hide();
-            }
-        }
-    });
+    motion.run(mini, capsule, false);
 }
 
 fn show_entry_menu(menu: &EntryMenuWindow, owner: &slint::Window, x: f32, y: f32, animated: bool) {
@@ -790,7 +971,7 @@ fn qa_entry_animation(
                 }
             });
         }
-        for (delay, name) in [(30, "open-early"), (200, "open-mid"), (460, "open-rest")] {
+        for (delay, name) in [(30, "open-early"), (300, "open-mid"), (740, "open-rest")] {
             let c = c.clone();
             let m = m.clone();
             let s = s.clone();
@@ -799,7 +980,7 @@ fn qa_entry_animation(
                 let capsule = c.upgrade().unwrap();
                 // Read the phase before GPU readback / PNG encoding. A busy
                 // desktop may deliver a sampling timer after the rings settle.
-                if delay == 200 && capsule.get_visible_count() > 1 {
+                if delay == 300 && capsule.get_visible_count() > 1 {
                     let progress = capsule.get_ring_progress();
                     let first = capsule.invoke_ring_phase(0);
                     let last = capsule.invoke_ring_phase(capsule.get_visible_count() - 1);
@@ -831,18 +1012,18 @@ fn qa_entry_animation(
                 );
                 // Sample late enough for the brief expanding pulse to fade;
                 // its outer ring can initially exceed the resting silhouette.
-                if delay == 200 {
+                if delay == 300 {
                     let exiting = qa_entry_frame(m.upgrade().unwrap().window(), "mini-exit");
                     assert!(
                         exiting < settled_mini,
                         "Mini must shrink in rendered pixels"
                     );
                 }
-                if delay == 460 {
+                if delay == 740 {
                     assert_eq!(
                         capsule.get_reveal_progress(),
                         1.0,
-                        "Opening must finish within 460ms"
+                        "Opening must finish within 740ms"
                     );
                     assert!(!m.upgrade().unwrap().window().is_visible());
                     let h = heights.borrow();
@@ -907,7 +1088,7 @@ fn qa_entry_close(
     }
     // Schedule against the actual collapse, so a busy desktop cannot make the
     // completion assertion run before a delayed click's hide timer.
-    for (delay, name) in [(30, "close-early"), (160, "close-mid")] {
+    for (delay, name) in [(30, "close-early"), (240, "close-mid")] {
         let c = c.clone();
         let m = m.clone();
         let heights = heights.clone();
@@ -968,6 +1149,7 @@ fn qa_entry_close(
             capsule.invoke_collapse_to_mini();
             settings.invoke_set_animations(true);
             eprintln!("WACU_QA entry_reversal_disabled_pass");
+            let _ = slint::quit_event_loop();
         });
     });
 }
@@ -976,13 +1158,17 @@ fn qa_entry_close(
 fn qa_handoff_scene(
     mini: &MiniWindow,
     capsule: &CapsuleWindow,
-    _motion: &EntryMotion,
+    motion: &EntryMotion,
     start: Instant,
     scenes: &Rc<RefCell<Vec<serde_json::Value>>>,
 ) {
     let index = scenes.borrow().len();
     let mut windows = Vec::new();
-    for (label, window) in [("mini", mini.window()), ("capsule", capsule.window())] {
+    for (label, window) in [
+        ("mini", mini.window()),
+        ("capsule", capsule.window()),
+        ("flow", motion.layer.window()),
+    ] {
         if !window.is_visible() {
             continue;
         }
@@ -990,9 +1176,34 @@ fn qa_handoff_scene(
             platform_windows::utility_window_is_taskbar_excluded(window),
             "{label} must never become eligible for a taskbar button"
         );
+        if label == "flow" {
+            assert!(platform_windows::flow_is_passthrough(window));
+            let geometry = motion.geometry.borrow().unwrap();
+            let (x, y, width, height) = geometry.bounds();
+            assert_eq!(window.position(), PhysicalPosition::new(x, y));
+            assert_eq!(window.size(), slint::PhysicalSize::new(width, height));
+            assert!(motion.layer.get_strokes().row_count() <= capsule.get_services().row_count());
+        }
         let name = format!("handoff-{index:03}-{label}");
         let position = window.position();
         qa_entry_frame(window, &name);
+        if label == "flow" && std::env::var_os("WACU_QA_FLOW_DESKTOP").is_some() && index == 10 {
+            let geometry = motion.geometry.borrow().unwrap();
+            let points: Vec<_> = (0..capsule.get_visible_count() as usize)
+                .map(|i| {
+                    geometry.points(
+                        capsule.get_visible_count() as usize,
+                        i,
+                        motion.progress.get(),
+                    )[32]
+                })
+                .collect();
+            eprintln!(
+                "WACU_QA desktop flow p={:.3} colors={:x?}",
+                motion.progress.get(),
+                platform_windows::desktop_colors(&points)
+            );
+        }
         windows.push(serde_json::json!({"name": name, "x": position.x, "y": position.y}));
     }
     scenes
@@ -1043,6 +1254,7 @@ fn qa_entry_handoff(
             .set_position(PhysicalPosition::new(mini_pos.x, mini_pos.y));
         mini.set_animated(false);
         mini.set_revealed(true);
+        let _ = mini.get_reveal_progress();
         mini.set_animated(true);
         {
             let mut value = prefs.borrow_mut();
@@ -1070,7 +1282,7 @@ fn qa_entry_handoff(
         );
         assert!(
             capsule.get_revealed(),
-            "Both-end relay must begin immediately"
+            "Logo handoff must begin immediately"
         );
         assert!(platform_windows::utility_window_is_taskbar_excluded(
             mini.window()
@@ -1078,7 +1290,7 @@ fn qa_entry_handoff(
         assert!(platform_windows::utility_window_is_taskbar_excluded(
             capsule.window()
         ));
-        for delay in (30..=1500).step_by(30) {
+        for delay in (30..=2700).step_by(30) {
             let m = m.clone();
             let c = c.clone();
             let motion = motion.clone();
@@ -1103,7 +1315,7 @@ fn qa_entry_handoff(
         }
         let cap = c.clone();
         let pref = prefs.clone();
-        Timer::single_shot(Duration::from_millis(680), move || {
+        Timer::single_shot(Duration::from_millis(1400), move || {
             let capsule = cap.upgrade().unwrap();
             assert!(capsule.get_revealed() && capsule.get_ring_progress() == 1.0);
             assert_eq!(
@@ -1116,7 +1328,7 @@ fn qa_entry_handoff(
         let m2 = m.clone();
         let c2 = c.clone();
         let pref = prefs.clone();
-        Timer::single_shot(Duration::from_millis(1540), move || {
+        Timer::single_shot(Duration::from_millis(2800), move || {
             let mini = m2.upgrade().unwrap();
             assert!(mini.get_revealed() && mini.window().is_visible());
             assert_eq!(
@@ -1137,7 +1349,7 @@ fn qa_entry_handoff(
         });
         // Keep reading the reversed window while the test desktop can occlude
         // it; an undrawn Slint window may still report its previous frame phase.
-        for delay in [1700, 1850, 2000, 2200, 2350] {
+        for delay in [3000, 3250, 3500, 3750, 4000] {
             let cap = c.clone();
             Timer::single_shot(Duration::from_millis(delay), move || {
                 qa_entry_frame(
@@ -1146,7 +1358,7 @@ fn qa_entry_handoff(
                 );
             });
         }
-        Timer::single_shot(Duration::from_millis(2600), move || {
+        Timer::single_shot(Duration::from_millis(4300), move || {
             let mini = m.upgrade().unwrap();
             let capsule = c.upgrade().unwrap();
             assert!(
@@ -1191,6 +1403,8 @@ fn qa_entry_handoff(
             capsule.invoke_collapse_to_mini();
             mini.invoke_toggle_expanded();
             settings.invoke_set_animations(false);
+            assert!(!motion.active.get() && !motion.layer.window().is_visible());
+            assert!(!mini.get_flow_active() && !capsule.get_flow_controlled());
             assert!(platform_windows::utility_window_is_taskbar_excluded(
                 capsule.window()
             ));
@@ -1199,7 +1413,7 @@ fn qa_entry_handoff(
                 let capsule = cap.upgrade().unwrap();
                 assert!(capsule.window().is_visible() && capsule.get_revealed());
                 eprintln!(
-                    "WACU_QA entry_handoff_pass direction={direction} count={original_count} independent_positions stationary taskbar_excluded reversal disabled all_service_combinations"
+                    "WACU_QA entry_handoff_pass direction={direction} count={original_count} independent_positions separated_routes logo_handoff click_through taskbar_excluded reversal disabled all_service_combinations"
                 );
                 let _ = slint::quit_event_loop();
             });
@@ -1318,7 +1532,7 @@ fn qa_entry_controls(
             !s.upgrade().unwrap().window().is_visible(),
             "Left click must not open settings"
         );
-        Timer::single_shot(Duration::from_millis(760), move || {
+        Timer::single_shot(Duration::from_millis(flow::OPEN_MS + 150), move || {
             let capsule = c.upgrade().unwrap();
             let settings = s.upgrade().unwrap();
             let x = capsule.window().size().width as f32 / capsule.window().scale_factor() / 2.0;
@@ -1340,7 +1554,7 @@ fn qa_entry_controls(
                         m2.upgrade().unwrap().window().is_visible(),
                         "Left click must show Mini synchronously"
                     );
-                    Timer::single_shot(Duration::from_millis(760), move || {
+                    Timer::single_shot(Duration::from_millis(flow::CLOSE_MS + 150), move || {
                         let mini = m2.upgrade().unwrap();
                         let settings = s2.upgrade().unwrap();
                         let mini3 = mini.as_weak();
@@ -1535,7 +1749,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let startup_preview = Rc::new(Cell::new(false));
     let dragging = Rc::new(Cell::new(false));
     let detail_motion = DetailMotion::default();
-    let entry_motion = EntryMotion::default();
+    let entry_motion = EntryMotion::new()?;
 
     let capsule = CapsuleWindow::new()?;
     capsule.on_render_arc(arc_percent);
@@ -1626,8 +1840,15 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     {
         let weak = mini.as_weak();
+        let cap = capsule.as_weak();
+        let motion = entry_motion.clone();
         let prefs = preferences.clone();
         mini.on_start_drag(move || {
+            if motion.active.get() {
+                if let (Some(m), Some(c)) = (weak.upgrade(), cap.upgrade()) {
+                    motion.settle(&m, &c, false);
+                }
+            }
             let weak = weak.clone();
             let prefs = prefs.clone();
             Timer::single_shot(Duration::from_millis(15), move || {
@@ -1758,7 +1979,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         let last_open = last_popup_open.clone();
         let detail_weak = detail.as_weak();
         let motion = detail_motion.clone();
+        let mini_weak = mini.as_weak();
+        let entry_motion = entry_motion.clone();
         capsule.on_start_drag(move || {
+            if entry_motion.active.get() {
+                if let (Some(m), Some(c)) = (mini_weak.upgrade(), weak.upgrade()) {
+                    entry_motion.settle(&m, &c, true);
+                }
+            }
             preview.set(false);
             active_drag.set(true);
             if let Some(c) = weak.upgrade() {
@@ -1955,15 +2183,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             if !enabled && mini_active {
                 // Cancel handoff and collection timers immediately when motion
                 // is disabled; the saved target view remains authoritative.
-                motion.next();
                 if let (Some(c), Some(m)) = (cap.upgrade(), mini_weak.upgrade()) {
-                    if value.entry_view == EntryView::Mini {
-                        let _ = c.hide();
-                        m.set_revealed(true);
-                    } else {
-                        let _ = m.hide();
-                        c.set_revealed(true);
-                    }
+                    motion.settle(&m, &c, value.entry_view != EntryView::Mini);
                 }
             }
         });
@@ -1993,11 +2214,18 @@ fn main() -> Result<(), Box<dyn Error>> {
         let settings_weak = settings.as_weak();
         let detail_weak = detail.as_weak();
         let origin = edge_origin.clone();
+        let mini_weak = mini.as_weak();
+        let motion = entry_motion.clone();
         settings.on_set_capsule_size(move |size| {
             let size = size.clamp(0, 2) as u8;
             let mut value = prefs.borrow_mut();
             if value.capsule_size == size {
                 return;
+            }
+            if motion.active.get() {
+                if let (Some(m), Some(c)) = (mini_weak.upgrade(), capsule_weak.upgrade()) {
+                    motion.settle(&m, &c, value.entry_view != EntryView::Mini);
+                }
             }
             value.capsule_size = size;
             origin.set(None);
@@ -2095,8 +2323,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         let weak = settings.as_weak();
         let origin = edge_origin.clone();
         let mini_weak = mini.as_weak();
+        let motion = entry_motion.clone();
         settings.on_set_dock_side(move |index| {
             let mut value = pref.borrow_mut();
+            if motion.active.get() {
+                if let (Some(m), Some(c)) = (mini_weak.upgrade(), cap.upgrade()) {
+                    motion.settle(&m, &c, value.entry_view != EntryView::Mini);
+                }
+            }
             value.dock_left = index == 1;
             origin.set(None);
             if mini_active {
@@ -2136,8 +2370,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     {
         let pref = preferences.clone();
         let mini_weak = mini.as_weak();
+        let cap = capsule.as_weak();
+        let motion = entry_motion.clone();
         settings.on_reset_mini_position(move || {
             let Some(m) = mini_weak.upgrade() else { return };
+            if motion.active.get() {
+                if let Some(c) = cap.upgrade() {
+                    motion.settle(&m, &c, pref.borrow().entry_view != EntryView::Mini);
+                }
+            }
             let size = m.window().size();
             let pos = m.window().position();
             let area = platform_windows::work_area_at(Point {
@@ -2165,8 +2406,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         let mini_weak = mini.as_weak();
         let detail_weak = detail.as_weak();
         let origin = edge_origin.clone();
+        let motion = entry_motion.clone();
         settings.on_reset_capsule_position(move || {
             let Some(c) = cap.upgrade() else { return };
+            if motion.active.get() {
+                if let Some(m) = mini_weak.upgrade() {
+                    motion.settle(&m, &c, pref.borrow().entry_view != EntryView::Mini);
+                }
+            }
             let anchor = if let Some((x, y)) = pref.borrow().saved_position {
                 Point { x, y }
             } else if let Some(m) = mini_weak.upgrade() {
@@ -2923,18 +3170,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         qa_view.as_str(),
         "mini" | "capsule" | "quick" | "detail" | "settings"
     ) && std::env::var_os("WACU_QA_ENTRY_HANDOFF").is_none()
+        && std::env::var_os("WACU_QA_ENTRY_MOTION").is_none()
     {
         let mode = qa_view.clone();
         let m = mini.as_weak();
         let c = capsule.as_weak();
         let d = detail.as_weak();
         let s = settings.as_weak();
-        let snapshot_delay = if std::env::var_os("WACU_QA_ENTRY_HANDOFF").is_some() {
-            3200
-        } else if std::env::var_os("WACU_QA_ENTRY_CONTROLS").is_some() {
+        let snapshot_delay = if std::env::var_os("WACU_QA_ENTRY_CONTROLS").is_some() {
             4200
-        } else if std::env::var_os("WACU_QA_ENTRY_MOTION").is_some() {
-            2600
         } else if std::env::var_os("WACU_QA_DETAIL_FADE").is_some() {
             1250
         } else if std::env::var_os("WACU_QA_MINI_POSITIONS").is_some() {
