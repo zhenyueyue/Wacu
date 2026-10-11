@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod codex;
 mod flow;
 mod glow;
 mod placement;
@@ -25,6 +26,11 @@ const NAMES: [&str; 3] = ["Codex", "Claude Code", "WorkBuddy"];
 const SUBTITLES: [&str; 3] = ["OpenAI · ChatGPT", "Anthropic · Claude", "Credits · 积分"];
 // Used percentages (never remaining percentages). Explicitly marked demo in the UI.
 const VALUES: [i32; 3] = [13, 24, 2];
+
+thread_local! {
+    // UI-thread state; the worker sends only quota snapshots, never credentials.
+    static CODEX_USAGE: RefCell<codex::UsageState> = RefCell::default();
+}
 
 fn arc_svg(percent: i32) -> SharedString {
     arc_percent(percent as f32)
@@ -73,11 +79,11 @@ fn service(index: usize, visible: bool) -> Service {
         _ => slint::Color::from_rgb_u8(139, 92, 246),
     };
     let used = VALUES[index] * 10;
-    Service {
+    let mut item = Service {
         source_index: index as i32,
         label: NAMES[index].into(),
         subtitle: SUBTITLES[index].into(),
-        percent: VALUES[index],
+        percent: VALUES[index] as f32,
         used: used.to_string().into(),
         total: "1,000".into(),
         remaining: (1000 - used).to_string().into(),
@@ -86,7 +92,140 @@ fn service(index: usize, visible: bool) -> Service {
         arc: arc_svg(VALUES[index]),
         glow: glow::make(VALUES[index], tint),
         visible,
+        percent_text: format!("{}%", VALUES[index]).into(),
+        status: "演示数据".into(),
+        window_label: "今日用量".into(),
+        window_summary: format!("{used} 次").into(),
+        quota_details: "".into(),
+    };
+    if index == 0 {
+        CODEX_USAGE.with_borrow(|state| {
+            item.status = state.status().into();
+            item.percent = 0.0;
+            item.percent_text = "--".into();
+            item.arc = "".into();
+            item.glow = slint::Image::default();
+            item.used = "--".into();
+            item.total = "--".into();
+            item.remaining = "--".into();
+            item.reset = "--".into();
+            item.window_label = "额度窗口".into();
+            item.window_summary = "暂不可用".into();
+            item.quota_details = state.status().into();
+            if let Some(snapshot) = &state.snapshot {
+                item.quota_details = snapshot.details().into();
+                if let Some(window) = snapshot.main_window() {
+                    let percent = window.percent().unwrap();
+                    item.percent = percent as f32;
+                    item.percent_text = format!("{percent:.1}%").into();
+                    item.arc = arc_percent(percent as f32);
+                    item.glow = glow::make(percent.round() as i32, tint);
+                    item.used = format!("{percent:.1}%").into();
+                    item.total = "100%".into();
+                    item.remaining = format!("{:.1}%", 100.0 - percent).into();
+                    item.reset = window.reset().into();
+                    item.window_label = window.label().into();
+                    item.window_summary = format!("已用 {percent:.1}%").into();
+                }
+            }
+        });
     }
+    item
+}
+
+fn start_codex_watcher(
+    model: Rc<VecModel<Service>>,
+    settings: &SettingsWindow,
+    detail: &DetailWindow,
+    preferences: Rc<RefCell<Preferences>>,
+) -> Timer {
+    let timer = Timer::default();
+    // Existing visual/input QA stays deterministic and never accesses an account.
+    if cfg!(debug_assertions)
+        && std::env::var_os("WACU_QA_VIEW").is_some()
+        && std::env::var_os("WACU_QA_CODEX_LIVE").is_none()
+    {
+        return timer;
+    }
+    let (requests, incoming) = std::sync::mpsc::channel::<()>();
+    let (results, outgoing) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        while incoming.recv().is_ok() {
+            if results.send(codex::fetch()).is_err() {
+                break;
+            }
+        }
+    });
+    let busy = Rc::new(Cell::new(false));
+    let request = {
+        let busy = busy.clone();
+        Rc::new(move || {
+            if !busy.replace(true) && requests.send(()).is_err() {
+                busy.set(false);
+            }
+        })
+    };
+    let status = CODEX_USAGE.with_borrow(codex::UsageState::status);
+    settings.set_codex_status(status.clone().into());
+    settings.set_codex_refreshing(preferences.borrow().shown[0]);
+    if preferences.borrow().shown[0] {
+        request();
+    }
+    {
+        let request = request.clone();
+        let settings_weak = settings.as_weak();
+        settings.on_refresh_codex(move || {
+            request();
+            if let Some(settings) = settings_weak.upgrade() {
+                settings.set_codex_refreshing(true);
+            }
+        });
+    }
+    let settings = settings.as_weak();
+    let detail = detail.as_weak();
+    let mut next_refresh = Instant::now() + codex::REFRESH_INTERVAL;
+    let mut failures = 0u32;
+    let mut was_enabled = preferences.borrow().shown[0];
+    timer.start(TimerMode::Repeated, Duration::from_secs(1), move || {
+        if let Ok(result) = outgoing.try_recv() {
+            failures = if result.is_ok() {
+                0
+            } else {
+                (failures + 1).min(4)
+            };
+            next_refresh = Instant::now()
+                + (codex::REFRESH_INTERVAL * (1 << failures)).min(Duration::from_secs(1800));
+            CODEX_USAGE.with_borrow_mut(|state| state.apply(result));
+            busy.set(false);
+            let item = service(0, true);
+            for row in 0..model.row_count() {
+                if model.row_data(row).is_some_and(|s| s.source_index == 0) {
+                    model.set_row_data(row, item.clone());
+                }
+            }
+            if let Some(detail) = detail.upgrade() {
+                if detail.get_selected_service().source_index == 0 {
+                    detail.set_selected_service(item.clone());
+                }
+            }
+            if let Some(settings) = settings.upgrade() {
+                settings.set_codex_status(item.status);
+                settings.set_codex_refreshing(false);
+            }
+        }
+        let enabled = preferences.borrow().shown[0];
+        if enabled && !was_enabled {
+            next_refresh = Instant::now();
+        }
+        was_enabled = enabled;
+        if !busy.get() && enabled && Instant::now() >= next_refresh {
+            request();
+            if let Some(settings) = settings.upgrade() {
+                settings.set_codex_refreshing(true);
+            }
+        }
+    });
+    timer
 }
 
 fn visible_service_indices(shown: &[bool; 3]) -> impl Iterator<Item = usize> + '_ {
@@ -1719,6 +1858,13 @@ fn qa_entry_controls(
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    if std::env::args().any(|arg| arg == "--codex-usage-check") {
+        match codex::fetch() {
+            Ok(snapshot) => println!("{}", serde_json::to_string_pretty(&snapshot)?),
+            Err(error) => return Err(error.message().into()),
+        }
+        return Ok(());
+    }
     let owner_handle = Rc::new(Cell::new(0isize));
     let hook_owner = owner_handle.clone();
     use slint::winit_030::winit::platform::windows::WindowAttributesExtWindows;
@@ -1915,6 +2061,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     capsule.set_services(ModelRc::from(model.clone()));
     mini.set_services(ModelRc::from(model.clone()));
     refresh_model(&model, &capsule, &settings, &initial);
+    let _codex_watcher =
+        start_codex_watcher(model.clone(), &settings, &detail, preferences.clone());
 
     {
         let view = menu.as_weak();
@@ -3161,7 +3309,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
             "quick" | "detail" => {
-                show_detail(&detail, &capsule, 1, &initial, &detail_motion);
+                let index = std::env::var("WACU_QA_SERVICE")
+                    .ok()
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .unwrap_or(1)
+                    .min(2);
+                show_detail(&detail, &capsule, index, &initial, &detail_motion);
                 if std::env::var_os("WACU_QA_DETAIL_FADE").is_some() {
                     let fading = detail.as_weak();
                     Timer::single_shot(Duration::from_millis(85), move || {
@@ -3326,7 +3479,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         let c = capsule.as_weak();
         let d = detail.as_weak();
         let s = settings.as_weak();
-        let snapshot_delay = if std::env::var_os("WACU_QA_ENTRY_CONTROLS").is_some() {
+        let snapshot_delay = if std::env::var_os("WACU_QA_CODEX_LIVE").is_some() {
+            7000
+        } else if std::env::var_os("WACU_QA_ENTRY_CONTROLS").is_some() {
             4200 + flow::duration_ms(true, true) - flow::OPEN_MS + flow::duration_ms(true, false)
                 - flow::CLOSE_MS
         } else if std::env::var_os("WACU_QA_DETAIL_FADE").is_some() {
@@ -3339,6 +3494,37 @@ fn main() -> Result<(), Box<dyn Error>> {
             900
         };
         Timer::single_shot(Duration::from_millis(snapshot_delay), move || {
+            if std::env::var_os("WACU_QA_CODEX_LIVE").is_some() {
+                CODEX_USAGE.with_borrow(|state| {
+                    assert!(state.error.is_none(), "Live Codex quota read failed");
+                    assert!(
+                        state
+                            .snapshot
+                            .as_ref()
+                            .and_then(codex::Snapshot::main_window)
+                            .is_some()
+                    );
+                });
+                let expected = service(0, true);
+                let capsule = c.upgrade().unwrap();
+                let actual = (0..capsule.get_services().row_count())
+                    .filter_map(|i| capsule.get_services().row_data(i))
+                    .find(|item| item.source_index == 0)
+                    .unwrap();
+                assert_eq!(actual.percent_text, expected.percent_text);
+                if mode == "quick" || mode == "detail" {
+                    let detail = d.upgrade().unwrap();
+                    assert_eq!(
+                        detail.get_selected_service().percent_text,
+                        expected.percent_text
+                    );
+                    assert_eq!(
+                        detail.get_selected_service().quota_details,
+                        expected.quota_details
+                    );
+                }
+                eprintln!("WACU_QA codex_live_model_pass");
+            }
             let snapshot = match mode.as_str() {
                 "mini" => m
                     .upgrade()
@@ -3662,12 +3848,39 @@ mod tests {
 
     #[test]
     fn demo_usage_and_remaining_are_consistent() {
-        for index in 0..3 {
+        for index in 1..3 {
             let item = service(index, true);
             let used: i32 = item.used.parse().unwrap();
             let remaining: i32 = item.remaining.parse().unwrap();
             assert_eq!(used + remaining, 1000);
-            assert_eq!(item.percent, used / 10);
+            assert_eq!(item.percent, (used / 10) as f32);
         }
+    }
+
+    #[test]
+    fn codex_ui_uses_real_window_and_never_demo_counts() {
+        CODEX_USAGE.with_borrow_mut(|state| *state = codex::UsageState::default());
+        assert_eq!(service(0, true).percent_text, "--");
+        assert!(service(0, true).arc.is_empty());
+        CODEX_USAGE.with_borrow_mut(|state| {
+            state.apply(codex::parse_snapshot(serde_json::json!({
+                "rateLimits":{"primary":{"usedPercent":12.5,"windowDurationMins":300},
+                    "secondary":{"usedPercent":32,"windowDurationMins":10080}}
+            })))
+        });
+        let item = service(0, true);
+        assert_eq!(item.percent_text, "12.5%");
+        assert_eq!(item.percent, 12.5);
+        assert_eq!(item.remaining, "87.5%");
+        assert_eq!(item.window_label, "5小时额度");
+        assert_eq!(item.arc, arc_percent(12.5));
+        assert!(item.quota_details.contains("每周额度"));
+        CODEX_USAGE.with_borrow_mut(|state| state.apply(Err(codex::FetchError::Connection)));
+        assert_eq!(service(0, true).percent_text, "12.5%");
+        assert!(service(0, true).status.contains("保留上次数据"));
+        CODEX_USAGE.with_borrow_mut(|state| state.apply(Err(codex::FetchError::Unauthorized)));
+        assert_eq!(service(0, true).percent_text, "--");
+        assert!(service(0, true).arc.is_empty());
+        CODEX_USAGE.with_borrow_mut(|state| *state = codex::UsageState::default());
     }
 }

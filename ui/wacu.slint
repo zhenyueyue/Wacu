@@ -1,4 +1,4 @@
-import { Slider, ComboBox, Palette } from "std-widgets.slint";
+import { Slider, ComboBox, Palette, ScrollView } from "std-widgets.slint";
 
 global Tokens {
     out property <float> panel-scale: 1.0;
@@ -15,8 +15,9 @@ global Tokens {
 
 export struct Service {
     source-index: int, label: string, subtitle: string,
-    percent: int, used: string, total: string, remaining: string, reset: string,
+    percent: float, used: string, total: string, remaining: string, reset: string,
     accent: color, arc: string, glow: image, visible: bool,
+    percent-text: string, status: string, window-label: string, window-summary: string, quota-details: string,
 }
 
 export struct FlowStroke { path: string, accent: color, strength: float, width: float, halo: float }
@@ -173,7 +174,7 @@ component QuotaItem inherits Rectangle {
     Text {
         x: 0px; y: root.size-mode == 0 ? 45px : (root.size-mode == 1 ? 51px : 57px);
         width: parent.width; height: 19px;
-        text: root.service.percent + "%";
+        text: root.service.percent-text;
         font-size: root.size-mode == 0 ? 14px : (root.size-mode == 1 ? 15px : 16px);
         font-family: "Bahnschrift"; font-weight: 500; color: Tokens.text;
         horizontal-alignment: center; vertical-alignment: center;
@@ -591,7 +592,7 @@ export component CapsuleWindow inherits Window {
 }
 
 component FillTrack inherits Rectangle {
-    in property <int> value;
+    in property <float> value;
     in property <color> accent;
     in property <bool> animated: true;
     height: (10px * Tokens.panel-scale); border-radius: (5px * Tokens.panel-scale); background: #35353c;
@@ -667,8 +668,8 @@ export component DetailWindow inherits Window {
             Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Tokens.divider; }
         }
         VerticalLayout {
-            padding-top: (root.expanded ? 68px : 76px) * Tokens.panel-scale; padding-bottom: (16px * Tokens.panel-scale); padding-left: (16px * Tokens.panel-scale); padding-right: (16px * Tokens.panel-scale); spacing: (12px * Tokens.panel-scale);
-            if root.expanded: Rectangle {
+            padding-top: (root.expanded ? 68px : 76px) * Tokens.panel-scale; padding-bottom: (16px * Tokens.panel-scale); padding-left: (16px * Tokens.panel-scale); padding-right: (16px * Tokens.panel-scale); spacing: (root.selected-service.source-index == 0 ? 8px : 12px) * Tokens.panel-scale;
+            if root.expanded && root.selected-service.source-index != 0: Rectangle {
                 height: (32px * Tokens.panel-scale); border-radius: (8px * Tokens.panel-scale); background: Tokens.raised; border-width: 1px; border-color: #37373e;
                 HorizontalLayout {
                     padding: (2px * Tokens.panel-scale); spacing: (2px * Tokens.panel-scale);
@@ -684,16 +685,16 @@ export component DetailWindow inherits Window {
             Rectangle {
                 height: (18px * Tokens.panel-scale);
                 Text { x: 0px; y: 0px; width: parent.width; height: parent.height; text: "用量进度"; color: Tokens.text; font-size: (13px * Tokens.panel-scale); font-weight: 600; vertical-alignment: center; }
-                Text { x: 0px; y: 0px; width: parent.width; height: parent.height; text: "演示数据"; color: Tokens.muted; font-size: (10px * Tokens.panel-scale); horizontal-alignment: right; vertical-alignment: center; }
+                Text { x: 0px; y: 0px; width: parent.width; height: parent.height; text: root.selected-service.source-index == 0 ? "账户额度" : "演示数据"; color: Tokens.muted; font-size: (10px * Tokens.panel-scale); horizontal-alignment: right; vertical-alignment: center; }
             }
             Rectangle {
                 height: (38px * Tokens.panel-scale);
-                Text { x: 0px; y: 0px; width: (100px * Tokens.panel-scale); height: parent.height; text: root.selected-service.percent + "%"; color: Tokens.text; font-size: (32px * Tokens.panel-scale); font-weight: 700; vertical-alignment: bottom; }
-                Text { x: 0px; y: 0px; width: parent.width; height: parent.height; text: root.selected-service.used + " / " + root.selected-service.total + " 次"; color: #e4e4e7; font-size: (13px * Tokens.panel-scale); horizontal-alignment: right; vertical-alignment: bottom; }
+                Text { x: 0px; y: 0px; width: (130px * Tokens.panel-scale); height: parent.height; text: root.selected-service.percent-text; color: Tokens.text; font-size: (32px * Tokens.panel-scale); font-weight: 700; vertical-alignment: bottom; }
+                Text { x: 0px; y: 0px; width: parent.width; height: parent.height; text: root.selected-service.source-index == 0 ? root.selected-service.window-label : root.selected-service.used + " / " + root.selected-service.total + " 次"; color: #e4e4e7; font-size: (13px * Tokens.panel-scale); horizontal-alignment: right; vertical-alignment: bottom; }
             }
             FillTrack { value: root.selected-service.percent; accent: root.selected-service.accent; animated: root.animated; }
             if root.expanded: Rectangle { height: 8px * Tokens.panel-scale; }
-            if root.expanded: Rectangle {
+            if root.expanded && root.selected-service.source-index != 0: Rectangle {
                 height: (132px * Tokens.panel-scale);
                 // Deterministic sample history; never presented as real provider usage.
                 Text { x: 0px; y: 0px; width: (25px * Tokens.panel-scale); height: (16px * Tokens.panel-scale); text: "100"; color: #d4d4d8; font-size: (10px * Tokens.panel-scale); }
@@ -722,12 +723,23 @@ export component DetailWindow inherits Window {
                 }
             }
             Rectangle {
-                height: (root.expanded ? 120px : 136px) * Tokens.panel-scale; border-radius: (8px * Tokens.panel-scale); background: @linear-gradient(135deg, #2a2f31 0%, #24292b 100%); border-width: 1px; border-color: #373e42;
+                height: (root.selected-service.source-index == 0 ? 116px : (root.expanded ? 120px : 136px)) * Tokens.panel-scale; border-radius: (8px * Tokens.panel-scale); background: @linear-gradient(135deg, #2a2f31 0%, #24292b 100%); border-width: 1px; border-color: #373e42;
                 VerticalLayout {
-                    padding-top: (root.expanded ? 12px : 14px) * Tokens.panel-scale; padding-bottom: (root.expanded ? 12px : 14px) * Tokens.panel-scale; padding-left: (12px * Tokens.panel-scale); padding-right: (12px * Tokens.panel-scale); spacing: 0px;
-                    InfoLine { compact: root.expanded; icon: @image-url("../assets/icons/clock.svg"); label: "今日用量"; value: root.selected-service.used + " 次"; }
-                    InfoLine { compact: root.expanded; icon: @image-url("../assets/icons/calendar.svg"); label: "剩余额度"; value: root.selected-service.remaining + " 次"; }
-                    InfoLine { compact: root.expanded; icon: @image-url("../assets/icons/clock.svg"); label: "重置时间"; value: root.selected-service.reset; }
+                    padding-top: (root.selected-service.source-index == 0 ? 10px : (root.expanded ? 12px : 14px)) * Tokens.panel-scale; padding-bottom: (root.selected-service.source-index == 0 ? 10px : (root.expanded ? 12px : 14px)) * Tokens.panel-scale; padding-left: (12px * Tokens.panel-scale); padding-right: (12px * Tokens.panel-scale); spacing: 0px;
+                    InfoLine { compact: root.expanded || root.selected-service.source-index == 0; icon: @image-url("../assets/icons/clock.svg"); label: root.selected-service.window-label; value: root.selected-service.window-summary; }
+                    InfoLine { compact: root.expanded || root.selected-service.source-index == 0; icon: @image-url("../assets/icons/calendar.svg"); label: "剩余额度"; value: root.selected-service.source-index == 0 ? root.selected-service.remaining : root.selected-service.remaining + " 次"; }
+                    InfoLine { compact: root.expanded || root.selected-service.source-index == 0; icon: @image-url("../assets/icons/clock.svg"); label: "重置时间"; value: root.selected-service.reset; }
+                }
+            }
+            if root.selected-service.source-index == 0: Text {
+                height: 28px; text: root.selected-service.status; wrap: word-wrap;
+                color: Tokens.secondary; font-size: 11px;
+            }
+            if root.expanded && root.selected-service.source-index == 0: ScrollView {
+                height: 156px; content-width: self.width;
+                VerticalLayout {
+                    alignment: start;
+                    Text { text: root.selected-service.quota-details; wrap: word-wrap; color: Tokens.text; font-size: 12px; horizontal-alignment: left; vertical-alignment: top; }
                 }
             }
             Rectangle { vertical-stretch: 1; }
@@ -856,6 +868,9 @@ export component SettingsWindow inherits Window {
     in-out property <int> capsule-size: 1;
     in-out property <int> selected-page: 0;
     in-out property <string> status-message: "";
+    in property <string> codex-status: "正在读取 Codex 额度…";
+    in property <bool> codex-refreshing: false;
+    callback refresh-codex();
     callback set-pinned(bool);
     callback toggle-service(int, bool);
     callback close-settings();
@@ -943,7 +958,9 @@ export component SettingsWindow inherits Window {
                             SettingSwitch { label: "Claude Code"; hint: "Anthropic · Claude"; checked: root.show-claude; animated: root.animations-on; changed(value) => { root.toggle-service(1, value); } }
                             SettingSwitch { label: "Codex"; hint: "OpenAI · ChatGPT"; checked: root.show-codex; animated: root.animations-on; changed(value) => { root.toggle-service(0, value); } }
                             SettingSwitch { label: "WorkBuddy"; hint: "积分额度"; checked: root.show-workbuddy; animated: root.animations-on; changed(value) => { root.toggle-service(2, value); } }
-                            Text { height: (52px * Tokens.settings-scale); text: "用量与图表均为演示数据。\n尚未连接真实账户。"; color: Tokens.secondary; font-size: (12px * Tokens.settings-scale); wrap: word-wrap; }
+                            Text { height: (48px * Tokens.settings-scale); text: root.codex-status; color: Tokens.secondary; font-size: (12px * Tokens.settings-scale); wrap: word-wrap; }
+                            ActionRow { caption: root.codex-refreshing ? "正在刷新…" : "刷新 Codex 额度"; animated: root.animations-on; clicked => { root.refresh-codex(); } }
+                            Text { height: (60px * Tokens.settings-scale); text: "读取本机 Codex 已登录账户的额度。\nClaude Code 和 WorkBuddy 仍为演示数据。"; color: Tokens.secondary; font-size: (12px * Tokens.settings-scale); wrap: word-wrap; }
                         }
                         if root.selected-page == 2: VerticalLayout {
                             spacing: (12px * Tokens.settings-scale);
@@ -1005,7 +1022,7 @@ export component SettingsWindow inherits Window {
                             SectionTitle { text: "关于 Wacu"; }
                             Text { height: (36px * Tokens.settings-scale); text: "静静守望，每一份余量。"; color: Tokens.text; font-size: (14px * Tokens.settings-scale); }
                             Text { height: (24px * Tokens.settings-scale); text: "版本 0.2.0"; color: Tokens.secondary; font-size: (12px * Tokens.settings-scale); }
-                            Text { height: (64px * Tokens.settings-scale); text: "轻量、简洁、不打扰。\n用量数据与历史图表为演示，\n尚未连接真实账户。"; color: Tokens.secondary; font-size: (12px * Tokens.settings-scale); wrap: word-wrap; }
+                            Text { height: (64px * Tokens.settings-scale); text: "轻量、简洁、不打扰。\nCodex 已接入真实额度。\n其他服务与历史图表仍为演示。"; color: Tokens.secondary; font-size: (12px * Tokens.settings-scale); wrap: word-wrap; }
                             ActionRow { ui-scale: Tokens.settings-scale; caption: "开源项目"; icon: @image-url("../assets/icons/external.svg"); show-icon: true; animated: root.animations-on; clicked => { root.open-link(0); } }
                             ActionRow { ui-scale: Tokens.settings-scale; caption: "退出 Wacu"; animated: root.animations-on; clicked => { root.exit-app(); } }
                         }

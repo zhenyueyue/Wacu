@@ -4451,6 +4451,7 @@ dependencies = [
 name = "wacu"
 version = "0.2.0"
 dependencies = [
+ "chrono",
  "embed-resource",
  "png",
  "raw-window-handle",

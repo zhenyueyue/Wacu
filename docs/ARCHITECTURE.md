@@ -17,6 +17,7 @@ assets/app.ico              # EXE 多尺寸品牌图标
 assets/app-icon.png         # 窗口和托盘品牌图标
 assets/icons/               # 内嵌 SVG 线条图标与服务标记
 src/main.rs                 # UI 状态协调、事件和生命周期
+src/codex.rs                # 本机 Codex app-server 额度采集、窗口解析与错误状态
 src/glow.rs                 # 连续高斯圆环光晕
 src/platform_windows.rs     # 小范围 Windows 原生 API 封装
 src/placement.rs            # 可测试的多屏工作区坐标算法
@@ -53,7 +54,21 @@ scripts/check-entry-session.ps1 # 正式入口形态与位置的退出重启检�
 - 视觉胶囊与后续服务采集器解耦，采集器仅输出统一 UsageSnapshot。
 - Release 实机验证 CPU、内存、老显卡渲染器兼容与多屏 DPI。
 
-## 下阶段统一用量结构
+## Codex 真实额度采集
+
+`src/codex.rs` 发现 PATH / npm 原生二进制 / Codex 桌面应用的 `codex.exe`，也支持 `WACU_CODEX_PATH`。通过隐藏的 stdio 子进程依次发送 `initialize`、`initialized`、`account/read`、`account/rateLimits/read`。不创建 Codex 会话或推理任务，不直接访问认证文件；子进程沿用本机 Codex 登录与 `CODEX_HOME`。
+
+优先解析 `rateLimitsByLimitId`，保留全部额度桶；`rateLimits` 仅补充旧版主桶。圆环只使用 `codex` 桶（或旧版无 ID 的主桶），不会把另一个模型的额度当作 Codex 主额度。`usedPercent` 空值保持未知；窗口长度与重置时间均允许缺失，百分比限制在 0–100。
+
+采集工作线程通过 channel 返回不含身份信息的 `Snapshot`；UI 每秒检查本地结果，不在 UI 线程执行网络请求。正常刷新间隔 120 秒，错误退避 240 / 480 / 960 / 1800 秒；服务停用暂停自动请求，手动刷新合并进行中的请求。每轮 30 秒总超时，请求完成或失败均终止并回收子进程。
+
+UI 线程保存最近快照与状态，刷新额度时只更新对应服务行及打开的详情，不改变窗口几何、偏好或选中状态。临时错误保留旧快照并注明；退出登录、缺少 CLI 或不支持的账户清空旧额度。快照只驻留内存，仓库与偏好文件不存账户、Token、额度缓存。Windows Job Object 在 Wacu 退出时自动回收仍在查询的子进程。
+
+Debug 原生界面 QA 默认禁用网络采集；`scripts/check-codex.ps1` 显式启用只读的真实额度验收，检查圆环、快览、完整详情和服务管理的数据同步。截图保存在忽略的 `target/`；不归档私人额度到仓库。
+
+接口依据：[OpenAI 官方 App Server 文档](https://learn.chatgpt.com/docs/app-server#6-rate-limits-chatgpt)。
+
+## 后续统一用量结构
 
 ```rust
 struct UsageSnapshot {
