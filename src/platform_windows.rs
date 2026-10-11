@@ -14,7 +14,7 @@ use windows_sys::Win32::{
         GWL_EXSTYLE, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect,
         HTCAPTION, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW,
         SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, WM_NCLBUTTONDOWN, WS_EX_APPWINDOW,
-        WS_EX_TOOLWINDOW,
+        WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
     },
 };
 
@@ -118,6 +118,20 @@ pub fn configure_capsule(window: &slint::Window) {
             0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
         );
+    }
+}
+
+pub fn configure_transit(window: &slint::Window) {
+    configure_capsule(window);
+    if let Some(hwnd) = native_window(window) {
+        unsafe {
+            let existing = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            SetWindowLongPtrW(
+                hwnd,
+                GWL_EXSTYLE,
+                existing | WS_EX_NOACTIVATE as isize | WS_EX_TRANSPARENT as isize,
+            );
+        }
     }
 }
 

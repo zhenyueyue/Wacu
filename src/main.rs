@@ -240,19 +240,124 @@ fn remember_mini(mini: &MiniWindow, prefs: &Rc<RefCell<Preferences>>) {
 
 // One generation covers both windows, so a reversed handoff cannot be hidden
 // or re-revealed by timers left over from the previous direction.
-#[derive(Clone, Default)]
-struct EntryMotion(Rc<Cell<u64>>);
+#[derive(Clone)]
+struct EntryMotion(
+    Rc<Cell<u64>>,
+    Rc<RingTransitWindow>,
+    Rc<Cell<Option<Point>>>,
+);
 
 impl EntryMotion {
+    fn new() -> Result<Self, slint::PlatformError> {
+        let transit = RingTransitWindow::new()?;
+        transit.on_render_trail(arc_trail);
+        Ok(Self(
+            Rc::new(Cell::new(0)),
+            Rc::new(transit),
+            Rc::new(Cell::new(None)),
+        ))
+    }
+
     fn next(&self) -> u64 {
         let generation = self.0.get().wrapping_add(1);
         self.0.set(generation);
+        self.2.set(None);
+        let _ = self.1.hide();
         generation
+    }
+
+    fn fly(
+        &self,
+        from: Point,
+        to: Point,
+        services: ModelRc<Service>,
+        done: impl FnOnce() + 'static,
+    ) {
+        if handoff_duration(from, to) == 0 {
+            done();
+            return;
+        }
+        self.1.set_services(services);
+        self.1.set_progress(0.0);
+        self.2.set(Some(from));
+        let _ = self.1.show();
+        platform_windows::configure_transit(self.1.window());
+        let generation = self.0.get();
+        let duration = Duration::from_millis(handoff_duration(from, to));
+        let done: Rc<RefCell<Option<Box<dyn FnOnce()>>>> =
+            Rc::new(RefCell::new(Some(Box::new(done))));
+        fn step(
+            motion: EntryMotion,
+            generation: u64,
+            from: Point,
+            to: Point,
+            start: Instant,
+            duration: Duration,
+            done: Rc<RefCell<Option<Box<dyn FnOnce()>>>>,
+        ) {
+            if motion.0.get() != generation {
+                return;
+            }
+            let progress = (start.elapsed().as_secs_f32() / duration.as_secs_f32()).min(1.0);
+            let center = placement::handoff_point(from, to, progress);
+            motion.2.set(Some(center));
+            let size = motion.1.window().size();
+            motion.1.window().set_position(PhysicalPosition::new(
+                center.x - size.width as i32 / 2,
+                center.y - size.height as i32 / 2,
+            ));
+            motion.1.set_progress(progress);
+            if progress >= 1.0 {
+                let _ = motion.1.hide();
+                motion.2.set(None);
+                if let Some(done) = done.borrow_mut().take() {
+                    done();
+                }
+            } else {
+                Timer::single_shot(Duration::from_millis(16), move || {
+                    step(motion, generation, from, to, start, duration, done);
+                });
+            }
+        }
+        step(
+            self.clone(),
+            generation,
+            from,
+            to,
+            Instant::now(),
+            duration,
+            done,
+        );
     }
 }
 
-fn show_mini(mini: &MiniWindow, prefs: &Rc<RefCell<Preferences>>, motion: &EntryMotion) {
-    let generation = motion.next();
+fn handoff_duration(from: Point, to: Point) -> u64 {
+    let distance = (to.x as f64 - from.x as f64).hypot(to.y as f64 - from.y as f64);
+    if distance < 24.0 {
+        0
+    } else {
+        (100.0 + distance * 0.10).clamp(100.0, 260.0).round() as u64
+    }
+}
+
+fn mini_center(mini: &MiniWindow) -> Point {
+    let pos = mini.window().position();
+    let size = mini.window().size();
+    Point {
+        x: pos.x + size.width as i32 / 2,
+        y: pos.y + size.height as i32 / 2,
+    }
+}
+
+fn capsule_center(capsule: &CapsuleWindow) -> Point {
+    let pos = capsule.window().position();
+    Point {
+        x: pos.x + capsule.window().size().width as i32 / 2,
+        y: pos.y + (capsule.get_hero_y() * capsule.window().scale_factor()).round() as i32,
+    }
+}
+
+fn prepare_mini(mini: &MiniWindow, prefs: &Rc<RefCell<Preferences>>) {
     // Instantiate the HWND before reading its physical dimensions. Before the
     // first show(), Slint can report a zero size and place Mini off screen.
     mini.set_revealed(false);
@@ -272,6 +377,12 @@ fn show_mini(mini: &MiniWindow, prefs: &Rc<RefCell<Preferences>>, motion: &Entry
     mini.window()
         .set_position(PhysicalPosition::new(position.x, position.y));
     remember_mini(mini, prefs); // Persist the initial Mini location once.
+    platform_windows::configure_capsule(mini.window());
+}
+
+fn show_mini(mini: &MiniWindow, prefs: &Rc<RefCell<Preferences>>, motion: &EntryMotion) {
+    let generation = motion.next();
+    prepare_mini(mini, prefs);
     if !mini.get_animated() {
         platform_windows::configure_capsule(mini.window());
         mini.set_revealed(true);
@@ -297,6 +408,7 @@ fn expand_entry(
     prefs: &Rc<RefCell<Preferences>>,
     motion: &EntryMotion,
 ) {
+    let from = motion.2.get().unwrap_or_else(|| mini_center(mini));
     let generation = motion.next();
     let pos = mini.window().position();
     remember_mini(mini, prefs);
@@ -320,18 +432,16 @@ fn expand_entry(
         capsule.set_revealed(true);
         return;
     }
-    if already_visible {
+    if already_visible && capsule.get_revealed() {
         capsule.set_revealed(true);
     } else {
         let weak = capsule.as_weak();
-        let motion = motion.clone();
-        Timer::single_shot(Duration::from_millis(16), move || {
-            if motion.0.get() == generation {
-                if let Some(c) = weak.upgrade() {
-                    platform_windows::configure_capsule(c.window());
-                    platform_windows::activate(c.window());
-                    c.set_revealed(true);
-                }
+        let target = capsule_center(capsule);
+        motion.fly(from, target, capsule.get_services(), move || {
+            if let Some(c) = weak.upgrade() {
+                platform_windows::configure_capsule(c.window());
+                platform_windows::activate(c.window());
+                c.set_revealed(true);
             }
         });
     }
@@ -352,24 +462,39 @@ fn collapse_entry(
     prefs: &Rc<RefCell<Preferences>>,
     motion: &EntryMotion,
 ) {
+    let from = motion.2.get();
+    let generation = motion.next();
     remember_position(capsule, prefs, None);
     remember_entry_view(prefs, EntryView::Mini);
     capsule.set_revealed(false);
-    show_mini(mini, prefs, motion);
-    let generation = motion.0.get();
+    prepare_mini(mini, prefs);
     if !capsule.get_animated() {
+        mini.set_revealed(true);
         let _ = capsule.hide();
         return;
     }
     let weak = capsule.as_weak();
+    let mini_weak = mini.as_weak();
+    let target = mini_center(mini);
+    let source = from.unwrap_or_else(|| capsule_center(capsule));
+    let services = capsule.get_services();
     let motion = motion.clone();
-    Timer::single_shot(Duration::from_millis(200), move || {
-        if motion.0.get() == generation {
-            if let Some(c) = weak.upgrade() {
-                let _ = c.hide();
+    Timer::single_shot(
+        Duration::from_millis(if from.is_some() { 0 } else { 340 }),
+        move || {
+            if motion.0.get() == generation {
+                if let Some(c) = weak.upgrade() {
+                    let _ = c.hide();
+                }
+                motion.fly(source, target, services, move || {
+                    if let Some(m) = mini_weak.upgrade() {
+                        platform_windows::configure_capsule(m.window());
+                        m.set_revealed(true);
+                    }
+                });
             }
-        }
-    });
+        },
+    );
 }
 
 fn show_entry_menu(menu: &EntryMenuWindow, owner: &slint::Window, x: f32, y: f32, animated: bool) {
@@ -704,7 +829,9 @@ fn qa_write_entry_frame(frame: &slint::SharedPixelBuffer<slint::Rgba8Pixel>, nam
 #[cfg(debug_assertions)]
 fn qa_entry_frame(window: &slint::Window, name: &str) -> usize {
     let frame = window.take_snapshot().expect("Entry animation snapshot");
-    if std::env::var_os("WACU_QA_ENTRY_MOTION").is_some() {
+    if std::env::var_os("WACU_QA_ENTRY_MOTION").is_some()
+        || std::env::var_os("WACU_QA_ENTRY_HANDOFF").is_some()
+    {
         ENTRY_FRAMES.with(|frames| frames.borrow_mut().push((name.into(), frame.clone())));
     } else {
         qa_write_entry_frame(&frame, name);
@@ -717,7 +844,12 @@ fn qa_entry_frame(window: &slint::Window, name: &str) -> usize {
 }
 
 #[cfg(debug_assertions)]
-fn qa_entry_animation(mini: &MiniWindow, capsule: &CapsuleWindow, settings: &SettingsWindow) {
+fn qa_entry_animation(
+    mini: &MiniWindow,
+    capsule: &CapsuleWindow,
+    settings: &SettingsWindow,
+    prefs: &Rc<RefCell<Preferences>>,
+) {
     // Warm the renderer before measuring the resting silhouette. A hidden or
     // occluded Windows test surface may otherwise render its first frame only
     // when take_snapshot() is first called, starting from the reveal's zero.
@@ -738,9 +870,27 @@ fn qa_entry_animation(mini: &MiniWindow, capsule: &CapsuleWindow, settings: &Set
     let m = mini.as_weak();
     let c = capsule.as_weak();
     let s = settings.as_weak();
+    let prefs = prefs.clone();
     Timer::single_shot(Duration::from_millis(400), move || {
         let mini = m.upgrade().unwrap();
         let capsule = c.upgrade().unwrap();
+        // Measure the local ring timeline here. Spatial flight is checked by
+        // the separate handoff suite with distant saved entry positions.
+        let area = platform_windows::work_area_at(platform_windows::cursor());
+        let scale = capsule.window().scale_factor();
+        let cap_pos = Point {
+            x: area.left + 150,
+            y: area.top + 100,
+        };
+        let mini_pos = Point {
+            x: cap_pos.x + capsule.window().size().width as i32 / 2
+                - mini.window().size().width as i32 / 2,
+            y: cap_pos.y + (capsule.get_hero_y() * scale).round() as i32
+                - mini.window().size().height as i32 / 2,
+        };
+        mini.window()
+            .set_position(PhysicalPosition::new(mini_pos.x, mini_pos.y));
+        prefs.borrow_mut().saved_position = Some((cap_pos.x, cap_pos.y));
         let settled_mini = qa_entry_frame(mini.window(), "mini-rest");
         assert!(
             settled_mini > 0,
@@ -755,7 +905,7 @@ fn qa_entry_animation(mini: &MiniWindow, capsule: &CapsuleWindow, settings: &Set
             "Exit must render before hiding Mini"
         );
         let heights = Rc::new(RefCell::new(Vec::new()));
-        for delay in [40, 60, 100, 120, 160, 200, 260, 300] {
+        for delay in [40, 60, 100, 120, 160, 200, 260, 300, 340, 380, 420] {
             let c = c.clone();
             let m = m.clone();
             Timer::single_shot(Duration::from_millis(delay), move || {
@@ -765,7 +915,7 @@ fn qa_entry_animation(mini: &MiniWindow, capsule: &CapsuleWindow, settings: &Set
                 }
             });
         }
-        for (delay, name) in [(30, "open-early"), (80, "open-mid"), (225, "open-rest")] {
+        for (delay, name) in [(30, "open-early"), (200, "open-mid"), (460, "open-rest")] {
             let c = c.clone();
             let m = m.clone();
             let s = s.clone();
@@ -774,12 +924,12 @@ fn qa_entry_animation(mini: &MiniWindow, capsule: &CapsuleWindow, settings: &Set
                 let capsule = c.upgrade().unwrap();
                 // Read the phase before GPU readback / PNG encoding. A busy
                 // desktop may deliver a sampling timer after the rings settle.
-                if delay == 80 && capsule.get_visible_count() == 3 {
+                if delay == 200 && capsule.get_visible_count() > 1 {
                     let progress = capsule.get_ring_progress();
                     let first = capsule.invoke_ring_phase(0);
-                    let last = capsule.invoke_ring_phase(2);
+                    let last = capsule.invoke_ring_phase(capsule.get_visible_count() - 1);
                     assert!(first >= last, "Quota rings must follow their visible order");
-                    if progress > 0.2 && progress < 0.75 {
+                    if progress > 0.52 && progress < 0.86 {
                         assert!(first > last, "Active ring stages must be staggered");
                     }
                 }
@@ -806,18 +956,18 @@ fn qa_entry_animation(mini: &MiniWindow, capsule: &CapsuleWindow, settings: &Set
                 );
                 // Sample late enough for the brief expanding pulse to fade;
                 // its outer ring can initially exceed the resting silhouette.
-                if delay == 80 {
+                if delay == 200 {
                     let exiting = qa_entry_frame(m.upgrade().unwrap().window(), "mini-exit");
                     assert!(
                         exiting < settled_mini,
                         "Mini must shrink in rendered pixels"
                     );
                 }
-                if delay == 225 {
+                if delay == 460 {
                     assert_eq!(
                         capsule.get_reveal_progress(),
                         1.0,
-                        "Opening must finish within 225ms"
+                        "Opening must finish within 460ms"
                     );
                     assert!(!m.upgrade().unwrap().window().is_visible());
                     let h = heights.borrow();
@@ -827,7 +977,7 @@ fn qa_entry_animation(mini: &MiniWindow, capsule: &CapsuleWindow, settings: &Set
                     );
                     eprintln!("WACU_QA entry_unfold_pixels_pass heights={h:?}");
                     let full_height = h[2];
-                    Timer::single_shot(Duration::from_millis(145), move || {
+                    Timer::single_shot(Duration::from_millis(60), move || {
                         let capsule = c.upgrade().unwrap();
                         qa_entry_frame(capsule.window(), "open-settled");
                         assert_eq!(
@@ -869,7 +1019,7 @@ fn qa_entry_close(
         "Collapsing must begin exit animation"
     );
     let heights = Rc::new(RefCell::new(vec![full_height]));
-    for delay in [20, 50, 110, 130, 170] {
+    for delay in [20, 50, 110, 130, 170, 230, 290] {
         let c = c.clone();
         let m = m.clone();
         Timer::single_shot(Duration::from_millis(delay), move || {
@@ -882,7 +1032,7 @@ fn qa_entry_close(
     }
     // Schedule against the actual collapse, so a busy desktop cannot make the
     // completion assertion run before a delayed click's hide timer.
-    for (delay, name) in [(30, "close-early"), (80, "close-mid")] {
+    for (delay, name) in [(30, "close-early"), (160, "close-mid")] {
         let c = c.clone();
         let m = m.clone();
         let heights = heights.clone();
@@ -900,7 +1050,7 @@ fn qa_entry_close(
             );
         });
     }
-    Timer::single_shot(Duration::from_millis(240), move || {
+    Timer::single_shot(Duration::from_millis(580), move || {
         let mini = m.upgrade().unwrap();
         assert!(mini.window().is_visible());
         assert!(!c.upgrade().unwrap().window().is_visible());
@@ -923,7 +1073,7 @@ fn qa_entry_close(
                 }
             });
         }
-        Timer::single_shot(Duration::from_millis(310), move || {
+        Timer::single_shot(Duration::from_millis(800), move || {
             let mini = m.upgrade().unwrap();
             let capsule = c.upgrade().unwrap();
             let settings = s.upgrade().unwrap();
@@ -943,6 +1093,253 @@ fn qa_entry_close(
             capsule.invoke_collapse_to_mini();
             settings.invoke_set_animations(true);
             eprintln!("WACU_QA entry_reversal_disabled_pass");
+        });
+    });
+}
+
+#[cfg(debug_assertions)]
+fn qa_handoff_scene(
+    mini: &MiniWindow,
+    capsule: &CapsuleWindow,
+    motion: &EntryMotion,
+    start: Instant,
+    scenes: &Rc<RefCell<Vec<serde_json::Value>>>,
+) {
+    let index = scenes.borrow().len();
+    let mut windows = Vec::new();
+    for (label, window) in [
+        ("mini", mini.window()),
+        ("capsule", capsule.window()),
+        ("transit", motion.1.window()),
+    ] {
+        if !window.is_visible() {
+            continue;
+        }
+        let name = format!("handoff-{index:03}-{label}");
+        let position = window.position();
+        qa_entry_frame(window, &name);
+        windows.push(serde_json::json!({"name": name, "x": position.x, "y": position.y}));
+    }
+    scenes
+        .borrow_mut()
+        .push(serde_json::json!({"time":start.elapsed().as_millis(),"windows":windows}));
+}
+
+#[cfg(debug_assertions)]
+fn qa_entry_handoff(
+    mini: &MiniWindow,
+    capsule: &CapsuleWindow,
+    settings: &SettingsWindow,
+    prefs: &Rc<RefCell<Preferences>>,
+    motion: &EntryMotion,
+) {
+    let m = mini.as_weak();
+    let c = capsule.as_weak();
+    let s = settings.as_weak();
+    let prefs = prefs.clone();
+    let motion = motion.clone();
+    Timer::single_shot(Duration::from_millis(350), move || {
+        let mini = m.upgrade().unwrap();
+        let capsule = c.upgrade().unwrap();
+        let direction = std::env::var("WACU_QA_ENTRY_HANDOFF")
+            .unwrap()
+            .parse::<i32>()
+            .unwrap();
+        let area = platform_windows::work_area_at(platform_windows::cursor());
+        let cap_pos = Point {
+            x: area.left + if direction == 2 { 100 } else { 460 },
+            y: area.top + 80,
+        };
+        let mini_pos = if direction == 0 {
+            Point {
+                x: cap_pos.x + capsule.window().size().width as i32 / 2
+                    - mini.window().size().width as i32 / 2,
+                y: cap_pos.y
+                    + (capsule.get_hero_y() * capsule.window().scale_factor()).round() as i32
+                    - mini.window().size().height as i32 / 2,
+            }
+        } else {
+            Point {
+                x: area.left + if direction == 2 { 460 } else { 100 },
+                y: area.top + 280,
+            }
+        };
+        mini.window()
+            .set_position(PhysicalPosition::new(mini_pos.x, mini_pos.y));
+        mini.set_animated(false);
+        mini.set_revealed(true);
+        mini.set_animated(true);
+        {
+            let mut value = prefs.borrow_mut();
+            value.saved_position = Some((cap_pos.x, cap_pos.y));
+            value.mini_position = Some((mini_pos.x, mini_pos.y));
+        }
+        let from = mini_center(&mini);
+        let start = Instant::now();
+        let scenes = Rc::new(RefCell::new(Vec::new()));
+        qa_handoff_scene(&mini, &capsule, &motion, start, &scenes);
+        mini.invoke_toggle_expanded();
+        assert_eq!(
+            capsule.get_services().row_count(),
+            mini.get_services().row_count()
+        );
+        assert_eq!(
+            capsule.get_visible_count() as usize,
+            mini.get_services().row_count()
+        );
+        assert_eq!(
+            capsule.get_visible_count(),
+            std::env::var("WACU_QA_COUNT")
+                .unwrap()
+                .parse::<i32>()
+                .unwrap()
+        );
+        if direction != 0 {
+            assert!(motion.1.window().is_visible());
+            let hwnd = platform_windows::native_window(motion.1.window()).unwrap();
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                GWL_EXSTYLE, GetWindowLongPtrW, WS_EX_NOACTIVATE, WS_EX_TRANSPARENT,
+            };
+            let style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
+            assert_ne!(style & WS_EX_NOACTIVATE as isize, 0);
+            assert_ne!(style & WS_EX_TRANSPARENT as isize, 0);
+            let flight = motion.clone();
+            Timer::single_shot(Duration::from_millis(60), move || {
+                let current = flight
+                    .2
+                    .get()
+                    .expect("Flight must have a visible intermediate position");
+                assert_ne!(current, from);
+                assert!(flight.1.get_progress() > 0.0 && flight.1.get_progress() < 1.0);
+                assert!(qa_entry_frame(flight.1.window(), "handoff-flight-middle") > 0);
+            });
+        } else {
+            assert!(!motion.1.window().is_visible());
+        }
+        for delay in (30..=1500).step_by(30) {
+            let m = m.clone();
+            let c = c.clone();
+            let motion = motion.clone();
+            let scenes = scenes.clone();
+            Timer::single_shot(Duration::from_millis(delay), move || {
+                qa_handoff_scene(
+                    &m.upgrade().unwrap(),
+                    &c.upgrade().unwrap(),
+                    &motion,
+                    start,
+                    &scenes,
+                )
+            });
+        }
+        let cap = c.clone();
+        let pref = prefs.clone();
+        let flight = motion.clone();
+        Timer::single_shot(Duration::from_millis(680), move || {
+            let capsule = cap.upgrade().unwrap();
+            assert!(capsule.get_revealed() && capsule.get_ring_progress() == 1.0);
+            assert_eq!(
+                capsule.window().position(),
+                PhysicalPosition::new(cap_pos.x, cap_pos.y)
+            );
+            assert_eq!(pref.borrow().mini_position, Some((mini_pos.x, mini_pos.y)));
+            assert!(!flight.1.window().is_visible());
+            capsule.invoke_collapse_to_mini();
+        });
+        let m2 = m.clone();
+        let c2 = c.clone();
+        let pref = prefs.clone();
+        let flight = motion.clone();
+        Timer::single_shot(Duration::from_millis(1540), move || {
+            let mini = m2.upgrade().unwrap();
+            assert!(mini.get_revealed() && mini.window().is_visible());
+            assert_eq!(
+                mini.window().position(),
+                PhysicalPosition::new(mini_pos.x, mini_pos.y)
+            );
+            assert!(!c2.upgrade().unwrap().window().is_visible());
+            assert!(!flight.1.window().is_visible() && flight.2.get().is_none());
+            assert_eq!(pref.borrow().mini_position, Some((mini_pos.x, mini_pos.y)));
+            assert_eq!(pref.borrow().saved_position, Some((cap_pos.x, cap_pos.y)));
+            std::fs::write(
+                "target/qa-entry-handoff-scenes.json",
+                serde_json::to_vec(&*scenes.borrow()).unwrap(),
+            )
+            .unwrap();
+            mini.invoke_toggle_expanded();
+            c2.upgrade().unwrap().invoke_collapse_to_mini();
+            mini.invoke_toggle_expanded();
+        });
+        // Keep reading the reversed window while the test desktop can occlude
+        // it; an undrawn Slint window may still report its previous frame phase.
+        for delay in [1700, 1850, 2000, 2200, 2350] {
+            let cap = c.clone();
+            Timer::single_shot(Duration::from_millis(delay), move || {
+                qa_entry_frame(
+                    cap.upgrade().unwrap().window(),
+                    &format!("handoff-reverse-{delay}"),
+                );
+            });
+        }
+        Timer::single_shot(Duration::from_millis(2600), move || {
+            let mini = m.upgrade().unwrap();
+            let capsule = c.upgrade().unwrap();
+            assert!(
+                capsule.get_revealed() && capsule.get_ring_progress() == 1.0,
+                "Reversed flight must settle: revealed={} progress={} flight={:?}",
+                capsule.get_revealed(),
+                capsule.get_ring_progress(),
+                motion.2.get()
+            );
+            assert!(!motion.1.window().is_visible());
+            s.upgrade().unwrap().invoke_set_animations(false);
+            capsule.invoke_collapse_to_mini();
+            assert!(mini.get_revealed() && !capsule.window().is_visible());
+            assert!(!motion.1.window().is_visible());
+            mini.invoke_toggle_expanded();
+            assert!(capsule.get_revealed() && !mini.window().is_visible());
+            assert!(!motion.1.window().is_visible());
+            // Every settings combination, including a lone green or purple
+            // service, must keep its original identity in all three surfaces.
+            let settings = s.upgrade().unwrap();
+            let original_count = capsule.get_visible_count();
+            for mask in 0..8 {
+                let shown = std::array::from_fn(|index| mask & (1 << index) != 0);
+                for (index, enabled) in shown.iter().enumerate() {
+                    settings.invoke_toggle_service(index as i32, *enabled);
+                }
+                let expected = visible_service_indices(&shown).collect::<Vec<_>>();
+                assert_eq!(capsule.get_services().row_count(), expected.len());
+                assert_eq!(mini.get_services().row_count(), expected.len());
+                for (row, id) in expected.iter().enumerate() {
+                    assert_eq!(
+                        capsule.get_services().row_data(row).unwrap().source_index,
+                        *id as i32
+                    );
+                }
+                qa_entry_frame(capsule.window(), &format!("handoff-selection-{mask}"));
+            }
+            let mut shown = [false; 3];
+            for &index in [1, 0, 2].iter().take(original_count as usize) {
+                shown[index] = true;
+            }
+            for (index, enabled) in shown.iter().enumerate() {
+                settings.invoke_toggle_service(index as i32, *enabled);
+            }
+            settings.invoke_set_animations(true);
+            capsule.invoke_collapse_to_mini();
+            mini.invoke_toggle_expanded();
+            settings.invoke_set_animations(false);
+            assert!(motion.2.get().is_none() && !motion.1.window().is_visible());
+            let cap = capsule.as_weak();
+            Timer::single_shot(Duration::from_millis(420), move || {
+                let capsule = cap.upgrade().unwrap();
+                assert!(capsule.window().is_visible() && capsule.get_revealed());
+                assert!(motion.2.get().is_none() && !motion.1.window().is_visible());
+                eprintln!(
+                    "WACU_QA entry_handoff_pass direction={direction} count={original_count} independent_positions click_through reversal disabled all_service_combinations"
+                );
+                let _ = slint::quit_event_loop();
+            });
         });
     });
 }
@@ -1052,7 +1449,7 @@ fn qa_entry_controls(
             !s.upgrade().unwrap().window().is_visible(),
             "Left click must not open settings"
         );
-        Timer::single_shot(Duration::from_millis(240), move || {
+        Timer::single_shot(Duration::from_millis(760), move || {
             let capsule = c.upgrade().unwrap();
             let settings = s.upgrade().unwrap();
             let x = capsule.window().size().width as f32 / capsule.window().scale_factor() / 2.0;
@@ -1074,7 +1471,7 @@ fn qa_entry_controls(
                         m2.upgrade().unwrap().window().is_visible(),
                         "Left click must show Mini synchronously"
                     );
-                    Timer::single_shot(Duration::from_millis(240), move || {
+                    Timer::single_shot(Duration::from_millis(760), move || {
                         let mini = m2.upgrade().unwrap();
                         let settings = s2.upgrade().unwrap();
                         let mini3 = mini.as_weak();
@@ -1175,6 +1572,23 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
     #[cfg(debug_assertions)]
+    if let Ok(direction) = std::env::var("WACU_QA_ENTRY_HANDOFF") {
+        let direction = direction.parse::<u8>()?;
+        let count = std::env::var("WACU_QA_COUNT")?.parse::<usize>()?.min(3);
+        let expected =
+            std::env::current_dir()?.join(format!("target/qa-handoff-profile-{count}-{direction}"));
+        let actual = std::env::var("APPDATA")
+            .unwrap_or_default()
+            .replace('/', "\\");
+        if qa_view != "mini"
+            || direction > 2
+            || !actual.eq_ignore_ascii_case(&expected.to_string_lossy().replace('/', "\\"))
+        {
+            return Err("Entry handoff QA requires an isolated APPDATA".into());
+        }
+        initial.animations_enabled = true;
+    }
+    #[cfg(debug_assertions)]
     if let Ok(mode) = std::env::var("WACU_QA_STARTUP") {
         let expected = std::env::current_dir()?.join("target/qa-startup-profile");
         let actual = std::env::var("APPDATA")
@@ -1203,7 +1617,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     if matches!(
         qa_view.as_str(),
         "capsule" | "quick" | "detail" | "settings"
-    ) || (qa_view == "mini" && std::env::var_os("WACU_QA_ENTRY_MOTION").is_some())
+    ) || (qa_view == "mini"
+        && (std::env::var_os("WACU_QA_ENTRY_MOTION").is_some()
+            || std::env::var_os("WACU_QA_ENTRY_HANDOFF").is_some()))
     {
         initial = Preferences {
             mode: Mode::Pinned,
@@ -1233,7 +1649,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let startup_preview = Rc::new(Cell::new(false));
     let dragging = Rc::new(Cell::new(false));
     let detail_motion = DetailMotion::default();
-    let entry_motion = EntryMotion::default();
+    let entry_motion = EntryMotion::new()?;
 
     let capsule = CapsuleWindow::new()?;
     capsule.on_render_arc(arc_percent);
@@ -1631,6 +2047,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let settings_weak = settings.as_weak();
         let detail_weak = detail.as_weak();
         let mini_weak = mini.as_weak();
+        let motion = entry_motion.clone();
         settings.on_set_animations(move |enabled| {
             let mut value = pref.borrow_mut();
             value.animations_enabled = enabled;
@@ -1648,6 +2065,20 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             if let Some(d) = detail_weak.upgrade() {
                 d.set_animated(enabled);
+            }
+            if !enabled && mini_active {
+                // Cancel flight and collection timers immediately when motion
+                // is disabled; the saved target view remains authoritative.
+                motion.next();
+                if let (Some(c), Some(m)) = (cap.upgrade(), mini_weak.upgrade()) {
+                    if value.entry_view == EntryView::Mini {
+                        let _ = c.hide();
+                        m.set_revealed(true);
+                    } else {
+                        let _ = m.hide();
+                        c.set_revealed(true);
+                    }
+                }
             }
         });
     }
@@ -2278,7 +2709,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                     qa_entry_controls(&mini, &capsule, &settings, &menu);
                 }
                 if std::env::var_os("WACU_QA_ENTRY_MOTION").is_some() {
-                    qa_entry_animation(&mini, &capsule, &settings);
+                    qa_entry_animation(&mini, &capsule, &settings, &preferences);
+                }
+                if std::env::var_os("WACU_QA_ENTRY_HANDOFF").is_some() {
+                    qa_entry_handoff(&mini, &capsule, &settings, &preferences, &entry_motion);
                 }
                 if std::env::var_os("WACU_QA_MINI_POSITIONS").is_some() {
                     let m = mini.as_weak();
@@ -2317,7 +2751,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         let c2 = c.as_weak();
                         let prefs2 = prefs.clone();
                         let settings2 = settings.as_weak();
-                        Timer::single_shot(Duration::from_millis(360), move || {
+                        Timer::single_shot(Duration::from_millis(720), move || {
                             let m = m2.upgrade().unwrap();
                             let c = c2.upgrade().unwrap();
                             let settings = settings2.upgrade().unwrap();
@@ -2341,7 +2775,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                                 .set_position(PhysicalPosition::new(moved.x, moved.y));
                             c.invoke_collapse_to_mini();
                             let mini3 = m.as_weak();
-                            Timer::single_shot(Duration::from_millis(360), move || {
+                            Timer::single_shot(Duration::from_millis(720), move || {
                                 let m = mini3.upgrade().unwrap();
                                 assert!(m.window().is_visible());
                                 assert_eq!(m.window().position().y, mini_pos.y);
@@ -2400,7 +2834,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         });
                         let m2 = m.as_weak();
                         let c2 = c.as_weak();
-                        Timer::single_shot(Duration::from_millis(420), move || {
+                        Timer::single_shot(Duration::from_millis(800), move || {
                             let m = m2.upgrade().unwrap();
                             let c = c2.upgrade().unwrap();
                             assert!(
@@ -2602,22 +3036,25 @@ fn main() -> Result<(), Box<dyn Error>> {
     if matches!(
         qa_view.as_str(),
         "mini" | "capsule" | "quick" | "detail" | "settings"
-    ) {
+    ) && std::env::var_os("WACU_QA_ENTRY_HANDOFF").is_none()
+    {
         let mode = qa_view.clone();
         let m = mini.as_weak();
         let c = capsule.as_weak();
         let d = detail.as_weak();
         let s = settings.as_weak();
-        let snapshot_delay = if std::env::var_os("WACU_QA_ENTRY_CONTROLS").is_some() {
-            3500
+        let snapshot_delay = if std::env::var_os("WACU_QA_ENTRY_HANDOFF").is_some() {
+            3200
+        } else if std::env::var_os("WACU_QA_ENTRY_CONTROLS").is_some() {
+            4200
         } else if std::env::var_os("WACU_QA_ENTRY_MOTION").is_some() {
             2600
         } else if std::env::var_os("WACU_QA_DETAIL_FADE").is_some() {
             1250
         } else if std::env::var_os("WACU_QA_MINI_POSITIONS").is_some() {
-            1800
+            2300
         } else if std::env::var_os("WACU_QA_MINI_INPUT").is_some() {
-            1500
+            1900
         } else {
             900
         };

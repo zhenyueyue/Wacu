@@ -1,4 +1,4 @@
-param([switch]$Archive, [int[]]$Sizes = @(0, 1, 2), [int[]]$Counts = @(0, 1, 3))
+param([switch]$Archive, [int[]]$Sizes = @(0, 1, 2), [int[]]$Counts = @(0, 1, 2, 3))
 $ErrorActionPreference = 'Stop'
 $taskRoot = Split-Path -Parent $PSScriptRoot
 $configPath = Join-Path $env:APPDATA 'Wacu\preferences.json'
