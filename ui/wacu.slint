@@ -135,18 +135,17 @@ component EntryMenuAction inherits Rectangle {
     in property <bool> danger: false;
     in property <bool> animated: true;
     callback activated();
-    height: 38px; border-radius: 8px;
-    background: hit.pressed ? #33483f : (hit.has-hover || root.selected ? #293b34 : transparent);
-    border-width: 1px; border-color: hit.has-hover || root.selected ? #415b50 : transparent;
-    animate background, border-color { duration: root.animated ? 90ms : 0ms; easing: ease-out; }
-    Rectangle {
-        x: 8px; y: 6px; width: 26px; height: 26px; border-radius: 7px;
-        background: root.danger ? #362b2e : #253b32;
-        Image { x: 5px; y: 5px; width: 16px; height: 16px; source: root.icon;
-            colorize: root.danger ? #e6b2ac : #a3e6ca; image-fit: contain; }
+    property <bool> highlighted: hit.has-hover || root.selected;
+    height: 28px; border-radius: 5px;
+    background: hit.pressed ? #363a41 : (root.highlighted ? #2d3137 : transparent);
+    animate background { duration: root.animated ? 80ms : 0ms; easing: ease-out; }
+    Image {
+        x: 9px; y: 7px; width: 14px; height: 14px; source: root.icon; image-fit: contain;
+        colorize: root.highlighted ? (root.danger ? #e7aaa5 : #e6e8ec) : #a8adb6;
     }
-    Text { x: 44px; y: 0px; width: parent.width - 52px; height: parent.height;
-        text: root.caption; color: Tokens.text; font-size: 13px; font-weight: 500; vertical-alignment: center; }
+    Text { x: 32px; y: 0px; width: parent.width - 40px; height: parent.height;
+        text: root.caption; color: root.highlighted ? Tokens.text : #d7dae0;
+        font-size: 12px; font-weight: 400; vertical-alignment: center; }
     hit := TouchArea { mouse-cursor: pointer; clicked => { root.activated(); } }
 }
 
@@ -156,18 +155,18 @@ component EntryMenu inherits Rectangle {
     callback activated(int);
     callback dismiss();
     public function focus-menu() { keyboard.focus(); }
-    width: 184px; height: 116px; background: transparent;
+    width: 128px; height: 84px; background: transparent;
     forward-focus: keyboard;
     Rectangle {
-        x: 8px; y: 8px; width: parent.width - 16px; height: parent.height - 16px;
-        border-radius: 12px; border-width: 1px; border-color: #414b49;
-        background: @linear-gradient(130deg, #252d2d 0%, #191d20 100%);
-        drop-shadow-blur: 12px; drop-shadow-offset-y: 3px; drop-shadow-color: #00000070;
+        x: 6px; y: 6px; width: parent.width - 12px; height: parent.height - 12px;
+        border-radius: 9px; border-width: 1px; border-color: #3a3d43;
+        background: @linear-gradient(130deg, #23262b 0%, #1b1d21 100%);
+        drop-shadow-blur: 8px; drop-shadow-offset-y: 2px; drop-shadow-color: #00000055;
         VerticalLayout {
-            padding: 7px; spacing: 4px;
+            padding: 5px; padding-bottom: 6px; spacing: 2px;
             EntryMenuAction { caption: "设置"; icon: @image-url("../assets/icons/settings.svg");
                 selected: root.selected == 0; animated: root.animated; activated => { root.activated(0); } }
-            Rectangle { height: 1px; background: #39433f; }
+            Rectangle { height: 1px; background: #34373d; }
             EntryMenuAction { caption: "退出"; icon: @image-url("../assets/icons/power.svg"); danger: true;
                 selected: root.selected == 1; animated: root.animated; activated => { root.activated(1); } }
         }
@@ -186,7 +185,7 @@ component EntryMenu inherits Rectangle {
 }
 
 export component EntryMenuWindow inherits Window {
-    title: "Wacu Menu"; width: 184px; height: 116px;
+    title: "Wacu Menu"; width: 128px; height: 84px;
     background: transparent; no-frame: true; always-on-top: true;
     default-font-family: "Segoe UI";
     in property <bool> animated: true;

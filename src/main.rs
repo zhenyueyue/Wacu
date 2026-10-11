@@ -335,12 +335,12 @@ fn show_entry_menu(menu: &EntryMenuWindow, owner: &slint::Window, x: f32, y: f32
     let area = platform_windows::work_area_at(anchor);
     let target = constrain(
         Point {
-            x: anchor.x - (8.0 * scale).round() as i32,
-            y: anchor.y - (8.0 * scale).round() as i32,
+            x: anchor.x - (6.0 * scale).round() as i32,
+            y: anchor.y - (6.0 * scale).round() as i32,
         },
         (
-            (184.0 * scale).round() as i32,
-            (116.0 * scale).round() as i32,
+            (128.0 * scale).round() as i32,
+            (84.0 * scale).round() as i32,
         ),
         area,
     );
@@ -807,7 +807,7 @@ fn qa_context_command(window: &slint::Window, menu: &EntryMenuWindow, x: f32, y:
     );
     use slint::platform::Key;
     if row == 1 || (row == 2 && x == 33.0) {
-        qa_click(menu.window(), 70.0, if row == 1 { 33.0 } else { 81.0 });
+        qa_click(menu.window(), 64.0, if row == 1 { 25.0 } else { 58.0 });
         return;
     }
     let keys = if row == 0 {
