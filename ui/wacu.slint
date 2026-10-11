@@ -129,7 +129,7 @@ export component MiniWindow inherits Window {
     in-out property <bool> revealed: false;
     out property <float> reveal-progress: root.revealed ? 1 : 0;
     animate reveal-progress {
-        duration: root.animated ? (root.revealed ? 320ms : 180ms) : 0ms;
+        duration: root.animated ? (root.revealed ? 180ms : 100ms) : 0ms;
         easing: root.revealed ? cubic-bezier(0.18, 0.9, 0.25, 1.12) : cubic-bezier(0.4, 0, 0.2, 1);
     }
     in-out property <bool> dragging: false;
@@ -213,7 +213,7 @@ export component CapsuleWindow inherits Window {
     // The native window stays fixed; only the surface unfolds from its logo.
     out property <float> reveal-progress: root.revealed ? 1 : 0;
     animate reveal-progress {
-        duration: root.animated ? (root.revealed ? 420ms : 280ms) : 0ms;
+        duration: root.animated ? (root.revealed ? 180ms : 140ms) : 0ms;
         easing: root.revealed ? cubic-bezier(0.22, 1, 0.36, 1) : cubic-bezier(0.4, 0, 0.2, 1);
     }
     property <float> motion: clamp(root.reveal-progress, 0, 1);
@@ -318,7 +318,7 @@ export component CapsuleWindow inherits Window {
                     preview-pressed: root.preview-pressed-service == service.source-index;
                     selected: root.selected-index == service.source-index;
                     animated: root.animated;
-                    interactive: root.revealed && root.motion > 0.98;
+                    interactive: root.revealed && root.motion > 0.85;
                     activated => { root.open-service(service.source-index); }
                 }
             }

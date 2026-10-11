@@ -77,7 +77,7 @@ foreach ($case in $cases) {
     }
     if ($case.Input -and $diagnostics -notmatch 'WACU_QA input_pass') { throw ('输入检查未通过: ' + $diagnostics) }
     if ($case.MiniInput -and $diagnostics -notmatch 'WACU_QA mini_toggle_drag_settings_pass') { throw ('Mini 交互检查未通过: ' + $diagnostics) }
-    if ($case.IconClicks -and $diagnostics -notmatch 'WACU_QA icon_single_double_pass') { throw ('Mini/胶囊头像单双击检查未通过: ' + $diagnostics) }
+    if ($case.IconClicks -and ($diagnostics -notmatch 'WACU_QA icon_single_double_pass' -or $diagnostics -notmatch 'WACU_QA icon_response_pass')) { throw ('Mini/胶囊头像单双击或响应时间检查未通过: ' + $diagnostics) }
     if ($case.MiniPositions -and $diagnostics -notmatch 'WACU_QA mini_independent_positions_pass') { throw ('Mini/胶囊独立位置检查未通过: ' + $diagnostics) }
     if ($case.DragDetail -and $diagnostics -notmatch 'WACU_QA detail_hide_restore_pass') {
         throw ('详情拖动恢复检查未通过: ' + $diagnostics)

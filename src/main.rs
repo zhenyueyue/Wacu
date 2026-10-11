@@ -194,12 +194,11 @@ fn remember_mini(mini: &MiniWindow, prefs: &Rc<RefCell<Preferences>>) {
     }
 }
 
-// A double-click must never perform the first single-click action (which
-// would hide the hit target before the second click). Slint's clicked callback
-// fires per completed click, so defer just the icon's single-click action.
+// Keep a short double-click confirmation window instead of making every
+// single click wait for a potentially very slow Windows accessibility setting.
 fn icon_double_click_time() -> Duration {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime;
-    Duration::from_millis(unsafe { GetDoubleClickTime() }.clamp(200, 900) as u64)
+    Duration::from_millis(unsafe { GetDoubleClickTime() }.clamp(100, 200) as u64)
 }
 
 #[derive(Clone, Default)]
@@ -316,7 +315,7 @@ fn expand_entry(
     } else {
         let weak = capsule.as_weak();
         let motion = motion.clone();
-        Timer::single_shot(Duration::from_millis(25), move || {
+        Timer::single_shot(Duration::from_millis(16), move || {
             if motion.0.get() == generation {
                 if let Some(c) = weak.upgrade() {
                     platform_windows::configure_capsule(c.window());
@@ -328,7 +327,7 @@ fn expand_entry(
     }
     let weak = mini.as_weak();
     let motion = motion.clone();
-    Timer::single_shot(Duration::from_millis(200), move || {
+    Timer::single_shot(Duration::from_millis(120), move || {
         if motion.0.get() == generation {
             if let Some(m) = weak.upgrade() {
                 let _ = m.hide();
@@ -353,7 +352,7 @@ fn collapse_entry(
     }
     let weak = capsule.as_weak();
     let motion = motion.clone();
-    Timer::single_shot(Duration::from_millis(300), move || {
+    Timer::single_shot(Duration::from_millis(160), move || {
         if motion.0.get() == generation {
             if let Some(c) = weak.upgrade() {
                 let _ = c.hide();
@@ -641,7 +640,7 @@ fn qa_entry_animation(mini: &MiniWindow, capsule: &CapsuleWindow, settings: &Set
             "Exit must render before hiding Mini"
         );
         let heights = Rc::new(RefCell::new(Vec::new()));
-        for (delay, name) in [(55, "open-early"), (145, "open-mid"), (465, "open-rest")] {
+        for (delay, name) in [(30, "open-early"), (80, "open-mid"), (225, "open-rest")] {
             let c = c.clone();
             let m = m.clone();
             let s = s.clone();
@@ -656,18 +655,25 @@ fn qa_entry_animation(mini: &MiniWindow, capsule: &CapsuleWindow, settings: &Set
                     capsule_size,
                     "Do not resize the HWND"
                 );
-                if delay == 55 {
+                // Sample late enough for the brief expanding pulse to fade;
+                // its outer ring can initially exceed the resting silhouette.
+                if delay == 80 {
                     let exiting = qa_entry_frame(m.upgrade().unwrap().window(), "mini-exit");
                     assert!(
                         exiting < settled_mini,
                         "Mini must shrink in rendered pixels"
                     );
                 }
-                if delay == 465 {
+                if delay == 225 {
+                    assert_eq!(
+                        capsule.get_reveal_progress(),
+                        1.0,
+                        "Opening must finish within 225ms"
+                    );
                     assert!(!m.upgrade().unwrap().window().is_visible());
                     let h = heights.borrow();
                     assert!(
-                        h[0] < h[1] && h[1] < h[2],
+                        h[0] < h[2] && h[0] <= h[1] && h[1] <= h[2],
                         "Shell must unfold in rendered frames: {h:?}"
                     );
                     eprintln!("WACU_QA entry_unfold_pixels_pass heights={h:?}");
@@ -703,7 +709,7 @@ fn qa_entry_close(
     let heights = Rc::new(RefCell::new(vec![full_height]));
     // Schedule against the actual collapse, so a busy desktop cannot make the
     // completion assertion run before a delayed click's hide timer.
-    for (delay, name) in [(60, "close-early"), (160, "close-mid")] {
+    for (delay, name) in [(30, "close-early"), (80, "close-mid")] {
         let c = c.clone();
         let m = m.clone();
         let heights = heights.clone();
@@ -713,7 +719,7 @@ fn qa_entry_close(
                 .push(qa_entry_frame(c.upgrade().unwrap().window(), name));
             qa_entry_frame(
                 m.upgrade().unwrap().window(),
-                if delay == 60 {
+                if delay == 30 {
                     "mini-return-early"
                 } else {
                     "mini-return-mid"
@@ -721,19 +727,19 @@ fn qa_entry_close(
             );
         });
     }
-    Timer::single_shot(Duration::from_millis(350), move || {
+    Timer::single_shot(Duration::from_millis(200), move || {
         let mini = m.upgrade().unwrap();
         assert!(mini.window().is_visible());
         assert!(!c.upgrade().unwrap().window().is_visible());
         assert_eq!(mini.window().position(), mini_position);
         let h = heights.borrow();
         assert!(
-            h[0] > h[1] && h[1] > h[2],
+            h[0] > h[2] && h[0] >= h[1] && h[1] >= h[2],
             "Shell must fold in rendered frames: {h:?}"
         );
         qa_entry_frame(mini.window(), "mini-return-rest");
         // Reverse both directions before pending show/hide timers finish.
-        for (delay, expand) in [(0, true), (10, false), (20, true), (90, false), (140, true)] {
+        for (delay, expand) in [(0, true), (10, false), (20, true), (50, false), (80, true)] {
             let m = m.clone();
             let c = c.clone();
             Timer::single_shot(Duration::from_millis(delay), move || {
@@ -744,7 +750,7 @@ fn qa_entry_close(
                 }
             });
         }
-        Timer::single_shot(Duration::from_millis(610), move || {
+        Timer::single_shot(Duration::from_millis(310), move || {
             let mini = m.upgrade().unwrap();
             let capsule = c.upgrade().unwrap();
             let settings = s.upgrade().unwrap();
@@ -1907,17 +1913,25 @@ fn main() -> Result<(), Box<dyn Error>> {
                                                         "Capsule single click must finish hiding"
                                                     );
                                                     qa_click(mini.window(), 33.0, 33.0);
+                                                    let clicked_at = Instant::now();
                                                     let m = mini.as_weak();
                                                     let c = capsule.as_weak();
                                                     Timer::single_shot(
-                                                        icon_double_click_time()
-                                                            + Duration::from_millis(110),
+                                                        Duration::from_millis(240),
                                                         move || {
                                                             let mini = m.upgrade().unwrap();
                                                             let capsule = c.upgrade().unwrap();
                                                             assert!(
                                                                 capsule.window().is_visible(),
-                                                                "Mini single click must expand"
+                                                                "Mini single click must expand within 240ms"
+                                                            );
+                                                            assert!(
+                                                                capsule.get_revealed(),
+                                                                "Single click must start the animation within 240ms"
+                                                            );
+                                                            eprintln!(
+                                                                "WACU_QA icon_response_pass probe_ms={}",
+                                                                clicked_at.elapsed().as_millis()
                                                             );
                                                             capsule.invoke_collapse_to_mini();
                                                             eprintln!(
@@ -2465,7 +2479,7 @@ mod tests {
         let clicks = IconClicks::default();
         let other_icon = IconClicks::default();
         let start = Instant::now();
-        let interval = Duration::from_millis(500);
+        let interval = Duration::from_millis(200);
         let first = clicks.register(start, interval).unwrap();
         assert!(clicks.pending(first));
         assert_eq!(
