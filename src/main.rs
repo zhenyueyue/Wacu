@@ -288,6 +288,7 @@ impl EntryMotion {
         mini.set_external_rings(false);
         capsule.set_flow_controlled(false);
         capsule.set_external_rings(false);
+        capsule.set_flow_strokes(ModelRc::default());
         // Evaluate the terminal bindings with zero duration before restoring
         // animation: releasing external control must not start another tween
         // from the last sampled frame to the resting value.
@@ -317,21 +318,44 @@ impl EntryMotion {
             let _ = mini.hide();
         }
         let services = capsule.get_services();
-        if geometry.spatial() && services.row_count() > 0 && !self.layer.window().is_visible() {
+        let arrival = if geometry.spatial() {
+            (330.0 + services.row_count().saturating_sub(1) as f64 * 18.0) / 720.0
+        } else {
+            0.10
+        };
+        let inside = progress >= arrival;
+        if services.row_count() > 0 && !self.layer.window().is_visible() {
             self.show_layer(geometry);
         }
         let strokes = (0..services.row_count())
             .filter_map(|index| {
-                let strength = geometry.opacity(services.row_count(), index, progress);
-                if !geometry.spatial() || strength <= 0.001 {
+                let coil = geometry.coil(services.row_count(), index, progress);
+                let strength = geometry.opacity(index, progress)
+                    * if inside {
+                        1.0
+                    } else {
+                        (1.0 + (capsule.get_surface_opacity() as f64 - 1.0)
+                            * flow::smooth(progress / arrival)) as f32
+                    };
+                if strength <= 0.001 {
                     return None;
                 }
                 use std::fmt::Write;
-                let (x, y, _, _) = geometry.bounds();
-                let scale = self.layer.window().scale_factor() as f64;
+                let (x, y, scale) = if inside {
+                    let p = capsule.window().position();
+                    (p.x, p.y, capsule.window().scale_factor() as f64)
+                } else {
+                    let (x, y, _, _) = geometry.bounds();
+                    (x, y, self.layer.window().scale_factor() as f64)
+                };
                 let mut path = String::new();
                 for (i, point) in geometry
-                    .points(services.row_count(), index, progress)
+                    .points(
+                        services.row_count(),
+                        index,
+                        progress,
+                        services.row_data(index).unwrap().percent as f64,
+                    )
                     .iter()
                     .enumerate()
                 {
@@ -343,15 +367,34 @@ impl EntryMotion {
                         (point.y - y as f64) / scale
                     );
                 }
+                if coil == 1.0 {
+                    path = geometry.terminal_path(
+                        index,
+                        services.row_data(index).unwrap().percent as f64,
+                        flow::Vector {
+                            x: x as f64,
+                            y: y as f64,
+                        },
+                        scale,
+                    );
+                }
                 Some(FlowStroke {
                     path: path.into(),
                     accent: services.row_data(index).unwrap().accent,
                     strength,
+                    width: (geometry.width(services.row_count(), index, progress) / scale) as f32,
+                    halo: (0.14 * (1.0 - coil)) as f32,
                 })
             })
             .collect::<Vec<_>>();
-        self.layer
-            .set_strokes(ModelRc::new(VecModel::from(strokes)));
+        let strokes = ModelRc::new(VecModel::from(strokes));
+        if inside {
+            capsule.set_flow_strokes(strokes);
+            self.layer.set_strokes(ModelRc::default());
+        } else {
+            self.layer.set_strokes(strokes);
+            capsule.set_flow_strokes(ModelRc::default());
+        }
     }
 
     fn show_layer(&self, geometry: flow::Geometry) {
@@ -363,8 +406,6 @@ impl EntryMotion {
         let scale = self.layer.window().scale_factor();
         self.layer.set_canvas_width(width as f32 / scale);
         self.layer.set_canvas_height(height as f32 / scale);
-        self.layer
-            .set_line_width(2.8 * geometry.source_scale.max(geometry.target_scale) as f32 / scale);
         self.layer
             .window()
             .set_size(slint::PhysicalSize::new(width, height));
@@ -398,12 +439,21 @@ impl EntryMotion {
             },
             source_scale: mini.window().scale_factor() as f64,
             target_scale: capsule.window().scale_factor() as f64,
+            quota_offset: capsule.invoke_ring_offset(0) as f64
+                * capsule.window().scale_factor() as f64,
+            quota_step: capsule.get_item_height() as f64 * capsule.window().scale_factor() as f64,
+            quota_diameter: capsule.get_ring_diameter() as f64
+                * capsule.window().scale_factor() as f64,
+            quota_width: capsule.get_quota_stroke_width() as f64
+                * capsule.window().scale_factor() as f64,
+            capsule_width: cap_size.width as f64,
+            bottom: cap_pos.y as f64 + cap_size.height as f64,
         };
         *self.geometry.borrow_mut() = Some(geometry);
         mini.set_flow_active(true);
-        mini.set_external_rings(geometry.spatial());
+        mini.set_external_rings(true);
         capsule.set_flow_controlled(true);
-        capsule.set_external_rings(geometry.spatial());
+        capsule.set_external_rings(true);
         mini.set_revealed(!open);
         capsule.set_revealed(open);
         self.frame(mini, capsule, from);
@@ -1183,6 +1233,19 @@ fn qa_handoff_scene(
             assert_eq!(window.position(), PhysicalPosition::new(x, y));
             assert_eq!(window.size(), slint::PhysicalSize::new(width, height));
             assert!(motion.layer.get_strokes().row_count() <= capsule.get_services().row_count());
+            if motion.progress.get() > 0.12 {
+                assert_eq!(
+                    motion.layer.get_strokes().row_count() + capsule.get_flow_strokes().row_count(),
+                    capsule.get_services().row_count(),
+                    "Every line must remain visible until it becomes its quota arc"
+                );
+                for i in 0..motion.layer.get_strokes().row_count() {
+                    assert!(
+                        motion.layer.get_strokes().row_data(i).unwrap().strength
+                            >= capsule.get_surface_opacity() - 0.001
+                    );
+                }
+            }
         }
         let name = format!("handoff-{index:03}-{label}");
         let position = window.position();
@@ -1195,6 +1258,7 @@ fn qa_handoff_scene(
                         capsule.get_visible_count() as usize,
                         i,
                         motion.progress.get(),
+                        capsule.get_services().row_data(i).unwrap().percent as f64,
                     )[32]
                 })
                 .collect();
@@ -1208,7 +1272,7 @@ fn qa_handoff_scene(
     }
     scenes
         .borrow_mut()
-        .push(serde_json::json!({"time":start.elapsed().as_millis(),"windows":windows}));
+        .push(serde_json::json!({"time":start.elapsed().as_millis(),"progress":motion.progress.get(),"active":motion.active.get(),"windows":windows}));
 }
 
 #[cfg(debug_assertions)]
@@ -2115,10 +2179,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         let pref = preferences.clone();
         let model = model.clone();
         let details = detail.as_weak();
+        let mini_weak = mini.as_weak();
+        let motion = entry_motion.clone();
         settings.on_toggle_service(move |index, enabled| {
             if let Ok(i) = usize::try_from(index) {
                 if i < 3 {
                     let mut value = pref.borrow_mut();
+                    if motion.active.get() {
+                        if let (Some(m), Some(c)) = (mini_weak.upgrade(), cap.upgrade()) {
+                            motion.settle(&m, &c, value.entry_view != EntryView::Mini);
+                        }
+                    }
                     value.shown[i] = enabled;
                     if let Err(error) = state::save(&value) {
                         eprintln!("Saving preferences: {error}");

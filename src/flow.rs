@@ -18,6 +18,12 @@ pub struct Geometry {
     pub logo: Vector,
     pub source_scale: f64,
     pub target_scale: f64,
+    pub quota_offset: f64,
+    pub quota_step: f64,
+    pub quota_diameter: f64,
+    pub quota_width: f64,
+    pub capsule_width: f64,
+    pub bottom: f64,
 }
 
 pub fn smooth(value: f64) -> f64 {
@@ -54,7 +60,7 @@ impl Geometry {
             x as i32,
             y as i32,
             (self.source.x.max(self.logo.x) + margin - x).ceil() as u32,
-            (self.source.y.max(self.logo.y) + margin - y).ceil() as u32,
+            (self.source.y.max(self.bottom) + margin - y).ceil() as u32,
         )
     }
 
@@ -82,16 +88,154 @@ impl Geometry {
         }
     }
 
-    pub fn opacity(self, count: usize, index: usize, progress: f64) -> f32 {
+    pub fn opacity(self, index: usize, progress: f64) -> f32 {
+        if !self.spatial() {
+            return (progress / 0.05).clamp(0.0, 1.0) as f32;
+        }
         let q = ((progress * 720.0 - index as f64 * 18.0) / 330.0).clamp(0.0, 1.0);
-        let stagger = 0.12 * index as f64 / count.saturating_sub(1).max(1) as f64;
-        let travel = smooth((self.rail(progress) - 0.10 - stagger) / 0.46);
-        ((q * 18.0).min(1.0) * (1.0 - smooth(travel * 2.5))) as f32
+        (q * 18.0).min(1.0) as f32
     }
 
-    pub fn points(self, count: usize, index: usize, progress: f64) -> Vec<Vector> {
+    pub fn coil(self, count: usize, index: usize, progress: f64) -> f64 {
+        let stagger = 0.12 * index as f64 / count.saturating_sub(1).max(1) as f64;
+        smooth((self.rail(progress) - 0.52 - stagger) / 0.28)
+    }
+
+    pub fn width(self, count: usize, index: usize, progress: f64) -> f64 {
+        let initial = 2.8 * self.source_scale.max(self.target_scale);
+        initial + (self.quota_width - initial) * self.coil(count, index, progress)
+    }
+
+    pub fn terminal_path(self, index: usize, percent: f64, origin: Vector, scale: f64) -> String {
+        if percent <= 0.0 {
+            return String::new();
+        }
+        let x = (self.logo.x - origin.x) / scale;
+        let y =
+            (self.logo.y + self.quota_offset + index as f64 * self.quota_step - origin.y) / scale;
+        let ratio =
+            (self.quota_diameter - 4.0 * self.target_scale - self.quota_width) / 56.0 / scale;
+        let radius = 24.0 * ratio;
+        if percent >= 100.0 {
+            return format!(
+                "M {x:.6} {:.6} A {radius:.6} {radius:.6} 0 1 1 {x:.6} {:.6} A {radius:.6} {radius:.6} 0 1 1 {x:.6} {:.6} Z",
+                y - radius,
+                y + radius,
+                y - radius
+            );
+        }
+        let angle = -PI / 2.0 + percent * PI * 2.0 / 100.0;
+        // Preserve the static meter's two-decimal SVG endpoint before scaling.
+        let end_x = ((28.0 + 24.0 * angle.cos()) * 100.0).round() / 100.0;
+        let end_y = ((28.0 + 24.0 * angle.sin()) * 100.0).round() / 100.0;
+        format!(
+            "M {x:.6} {:.6} A {radius:.6} {radius:.6} 0 {} 1 {:.6} {:.6}",
+            y - radius,
+            if percent > 50.0 { 1 } else { 0 },
+            x + (end_x - 28.0) * ratio,
+            y + (end_y - 28.0) * ratio
+        )
+    }
+
+    pub fn points(self, count: usize, index: usize, progress: f64, percent: f64) -> Vec<Vector> {
         let q = ((progress * 720.0 - index as f64 * 18.0) / 330.0).clamp(0.0, 1.0);
-        self.phase_points(count, index, q)
+        if self.spatial() && q < 1.0 {
+            return self.phase_points(count, index, q);
+        }
+        let logo_arc = self.phase_points(count, index, 1.0);
+        if !self.spatial() && progress < 0.10 {
+            let source_arc = self.phase_points(count, index, 0.0);
+            return source_arc
+                .into_iter()
+                .zip(logo_arc)
+                .map(|(a, b)| interpolate(a, b, smooth(progress / 0.10)))
+                .collect();
+        }
+        let r = self.rail(progress);
+        let stagger = 0.12 * index as f64 / count.saturating_sub(1).max(1) as f64;
+        let unwrap = smooth((r - 0.10 - stagger) / 0.16);
+        let rotate = smooth((r - 0.10 - stagger) / 0.075);
+        let down = smooth((r - 0.24 - stagger) / 0.34);
+        let coil = self.coil(count, index, progress);
+        let phase = smooth((r - 0.50 - stagger) / 0.28);
+        let side = if index % 2 == 0 { -1.0 } else { 1.0 };
+        let start = -PI / 2.0 + index as f64 * PI * 2.0 / count.max(1) as f64;
+        let span = PI * 1.6 / count.max(1) as f64;
+        let outgoing = if side < 0.0 { -PI } else { 0.0 };
+        let turn = (outgoing - start - span / 2.0 + PI).rem_euclid(PI * 2.0) - PI;
+        let motion = smooth(r / 0.43);
+        let shell_width =
+            56.0 * self.target_scale + (self.capsule_width - 80.0 * self.target_scale) * motion;
+        let edge = shell_width / 2.0 - 3.0 * self.target_scale;
+        let center = Vector {
+            x: self.logo.x + side * 10.0 * self.target_scale * (1.0 - phase),
+            y: self.logo.y + self.quota_offset + index as f64 * self.quota_step,
+        };
+        // Slint's static Path fits the viewbox into its stroke-inset bounds.
+        let radius = (self.quota_diameter * (0.86 + 0.14 * phase)
+            - 4.0 * self.target_scale
+            - self.quota_width)
+            * 24.0
+            / 56.0;
+        let destination_y = center.y - radius;
+        (0..=64)
+            .map(|j| {
+                let s = j as f64 / 64.0;
+                let angle = start + span * s + turn * rotate;
+                let arc = Vector {
+                    x: self.logo.x + 29.0 * self.target_scale * angle.cos(),
+                    y: self.logo.y + 29.0 * self.target_scale * angle.sin(),
+                };
+                let line = Vector {
+                    x: self.logo.x + side * edge,
+                    y: self.logo.y
+                        + (destination_y - self.logo.y) * down
+                        + (s - 0.5) * 24.0 * self.target_scale,
+                };
+                let angle = -PI / 2.0 + PI * 2.0 * percent.clamp(0.0, 100.0) / 100.0 * s;
+                let quota = Vector {
+                    x: center.x + radius * angle.cos(),
+                    y: center.y + radius * angle.sin(),
+                };
+                if coil == 0.0 {
+                    return interpolate(arc, line, unwrap);
+                }
+                // Curl around the outside of the meter instead of dragging a
+                // straight chord through its avatar. At zero curvature this
+                // is the incoming vertical line; at one it is the quota arc.
+                let line_center = Vector {
+                    x: line.x,
+                    y: self.logo.y + (destination_y - self.logo.y) * down,
+                };
+                let span = PI * 2.0 * percent.clamp(0.0, 100.0) / 100.0;
+                let final_angle = -PI / 2.0 + span / 2.0;
+                let initial_angle = (line_center.y - center.y).atan2(line_center.x - center.x);
+                let turn = (final_angle - initial_angle + PI).rem_euclid(PI * 2.0) - PI;
+                let mid_angle = initial_angle + turn * coil;
+                let initial_radius = (line_center.x - center.x).hypot(line_center.y - center.y);
+                let mid_radius = initial_radius + (radius - initial_radius) * coil;
+                let mid = Vector {
+                    x: center.x + mid_radius * mid_angle.cos(),
+                    y: center.y + mid_radius * mid_angle.sin(),
+                };
+                let length = 24.0 * self.target_scale * (1.0 - coil) + radius * span * coil;
+                let sweep = span * coil;
+                let theta = final_angle * coil;
+                if sweep <= 0.000001 {
+                    return Vector {
+                        x: mid.x - theta.sin() * length * (s - 0.5),
+                        y: mid.y + theta.cos() * length * (s - 0.5),
+                    };
+                }
+                let a = sweep * (s - 0.5);
+                let factor = 2.0 * (a / 2.0).sin() * length / sweep;
+                let curled = Vector {
+                    x: mid.x - (theta + a / 2.0).sin() * factor,
+                    y: mid.y + (theta + a / 2.0).cos() * factor,
+                };
+                if coil == 1.0 { quota } else { curled }
+            })
+            .collect()
     }
 
     fn phase_points(self, count: usize, index: usize, q: f64) -> Vec<Vector> {
@@ -186,6 +330,12 @@ mod tests {
             },
             source_scale: 1.0,
             target_scale: 1.5,
+            quota_offset: 102.0,
+            quota_step: 115.5,
+            quota_diameter: 84.0,
+            quota_width: 6.75,
+            capsule_width: 144.0,
+            bottom: 700.0,
         }
     }
     #[test]
@@ -230,7 +380,7 @@ mod tests {
             let (x, y, w, h) = g.bounds();
             for step in 0..=100 {
                 for i in 0..3 {
-                    for p in g.points(3, i, step as f64 / 100.0) {
+                    for p in g.points(3, i, step as f64 / 100.0, 24.0) {
                         assert!(p.x.is_finite() && p.y.is_finite());
                         assert!(p.x >= x as f64 && p.x <= x as f64 + w as f64);
                         assert!(p.y >= y as f64 && p.y <= y as f64 + h as f64);
@@ -248,6 +398,63 @@ mod tests {
                 let after = g.phase_points(3, i, boundary + 0.00001);
                 for (a, b) in before.into_iter().zip(after) {
                     assert!((a.x - b.x).hypot(a.y - b.y) < 0.1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn arriving_lines_remain_visible_through_quota_coiling() {
+        for count in 1..=3 {
+            for i in 0..count {
+                for step in 12..=100 {
+                    let p = step as f64 / 100.0;
+                    assert_eq!(fixture().opacity(i, p), 1.0);
+                    assert_eq!(fixture().points(count, i, p, 24.0).len(), 65);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn final_path_matches_static_quota_arc_and_width() {
+        let g = fixture();
+        let radius = (g.quota_diameter - 4.0 * g.target_scale - g.quota_width) * 24.0 / 56.0;
+        for (i, percent) in [24.0, 13.0, 2.0].into_iter().enumerate() {
+            let points = g.points(3, i, 1.0, percent);
+            let center = Vector {
+                x: g.logo.x,
+                y: g.logo.y + g.quota_offset + i as f64 * g.quota_step,
+            };
+            for (j, p) in points.iter().enumerate() {
+                let angle = -PI / 2.0 + PI * 2.0 * percent / 100.0 * j as f64 / 64.0;
+                assert!((p.x - center.x - radius * angle.cos()).abs() < 0.0001);
+                assert!((p.y - center.y - radius * angle.sin()).abs() < 0.0001);
+            }
+            assert_eq!(g.width(3, i, 1.0), g.quota_width);
+        }
+    }
+
+    #[test]
+    fn whole_path_is_continuous_at_logo_and_quota_stages() {
+        for spatial in [true, false] {
+            let mut g = fixture();
+            if !spatial {
+                g.source = g.logo;
+            }
+            for count in 1..=3 {
+                for i in 0..count {
+                    for step in 1..=1000 {
+                        let p = step as f64 / 1000.0;
+                        let before = g.points(count, i, p - 0.000001, 24.0);
+                        let after = g.points(count, i, p, 24.0);
+                        for (a, b) in before.into_iter().zip(after) {
+                            assert!(
+                                (a.x - b.x).hypot(a.y - b.y) < 0.1,
+                                "Discontinuity at {p}, spatial={spatial}, row={i}"
+                            );
+                        }
+                    }
                 }
             }
         }

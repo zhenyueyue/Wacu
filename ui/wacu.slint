@@ -19,27 +19,28 @@ export struct Service {
     accent: color, arc: string, glow: image, visible: bool,
 }
 
-export struct FlowStroke { path: string, accent: color, strength: float }
+export struct FlowStroke { path: string, accent: color, strength: float, width: float, halo: float }
 
 export component LineFlowWindow inherits Window {
     title: "Wacu Line Flow"; background: transparent; no-frame: true; always-on-top: true;
     in property <float> canvas-width: 128;
     in property <float> canvas-height: 128;
-    in property <float> line-width: 2.8;
     in property <[FlowStroke]> strokes;
     width: root.canvas-width * 1px; height: root.canvas-height * 1px;
     for stroke in root.strokes: Rectangle {
         width: root.width; height: root.height; background: transparent;
         Path {
             width: parent.width; height: parent.height;
+            fit: preserve;
             viewbox-width: root.canvas-width; viewbox-height: root.canvas-height;
-            commands: stroke.path; stroke: stroke.accent; stroke-width: root.line-width * 2px;
-            stroke-line-cap: round; fill: transparent; opacity: stroke.strength * 0.14;
+            commands: stroke.path; stroke: stroke.accent; stroke-width: stroke.width * 2px;
+            stroke-line-cap: round; fill: transparent; opacity: stroke.strength * stroke.halo;
         }
         Path {
             width: parent.width; height: parent.height;
+            fit: preserve;
             viewbox-width: root.canvas-width; viewbox-height: root.canvas-height;
-            commands: stroke.path; stroke: stroke.accent; stroke-width: root.line-width * 1px;
+            commands: stroke.path; stroke: stroke.accent; stroke-width: stroke.width * 1px;
             stroke-line-cap: round; fill: transparent; opacity: stroke.strength;
         }
     }
@@ -87,6 +88,7 @@ component RelayRing inherits Rectangle {
 
 component QuotaItem inherits Rectangle {
     in property <Service> service;
+    in property <bool> external-arc: false;
     in property <float> transition: 1;
     in property <float> spread: 1;
     in property <float> highlight: 0;
@@ -134,11 +136,12 @@ component QuotaItem inherits Rectangle {
             commands: root.highlight > 0 && root.highlight < 1 ? root.render-trail(100 * root.highlight + root.service.percent * root.transition - 9, 9) : "";
             stroke: root.service.accent.brighter(25%); stroke-width: root.ring-width + 0.5px;
             stroke-line-cap: round; fill: transparent;
-            opacity: 4 * root.highlight * (1 - root.highlight);
+            opacity: root.external-arc ? 0 : 4 * root.highlight * (1 - root.highlight);
         }
         Path {
             x: 2px; y: 2px; width: parent.width - 4px; height: parent.height - 4px;
             commands: root.transition >= 1 ? root.service.arc : root.render-arc(root.service.percent * root.transition);
+            opacity: root.external-arc ? 0 : 1;
             stroke: root.is-pressed ? root.service.accent.brighter(7%) : root.service.accent;
             viewbox-width: 56; viewbox-height: 56;
             stroke-width: root.ring-width; stroke-line-cap: round; fill: transparent;
@@ -350,10 +353,11 @@ export component CapsuleWindow inherits Window {
     title: "Wacu";
     in property <int> size-mode: 1;
     width: root.size-mode == 0 ? 88px : (root.size-mode == 1 ? 96px : 104px);
-    property <length> item-height: root.size-mode == 0 ? 70px : (root.size-mode == 1 ? 77px : 84px);
+    out property <length> item-height: root.size-mode == 0 ? 70px : (root.size-mode == 1 ? 77px : 84px);
     property <length> logo-size: root.size-mode == 0 ? 40px : (root.size-mode == 1 ? 44px : 48px);
     property <length> area-gap: root.size-mode == 0 ? 16px : (root.size-mode == 1 ? 18px : 20px);
-    property <length> ring-diameter: root.size-mode == 0 ? 50px : (root.size-mode == 1 ? 56px : 62px);
+    out property <length> ring-diameter: root.size-mode == 0 ? 50px : (root.size-mode == 1 ? 56px : 62px);
+    out property <length> quota-stroke-width: root.size-mode == 0 ? 4px : (root.size-mode == 1 ? 4.5px : 5px);
     property <length> logo-top: 8px + 8px * root.motion;
     out property <length> hero-y: 28px + root.logo-size / 2;
     height: 56px + root.logo-size + root.area-gap + root.item-height * max(1, visible-count);
@@ -368,6 +372,7 @@ export component CapsuleWindow inherits Window {
     in property <float> flow-progress: 0;
     in property <float> flow-reveal: 0;
     in property <float> flow-visibility: 0;
+    in property <[FlowStroke]> flow-strokes;
     // The native window stays fixed; only the surface unfolds from its logo.
     out property <float> reveal-progress: root.flow-controlled ? root.flow-reveal : (root.revealed ? 1 : 0);
     animate reveal-progress {
@@ -398,7 +403,7 @@ export component CapsuleWindow inherits Window {
         let step = clamp((root.ring-progress - 0.10 - 0.12 * index / max(1, root.visible-count - 1)) / 0.46, 0, 1);
         return step * step * (3 - 2 * step);
     }
-    pure function ring-offset(index: int) -> length {
+    public pure function ring-offset(index: int) -> length {
         return root.logo-size / 2 + root.area-gap + index * root.item-height + root.ring-diameter / 2;
     }
     property <float> rail-step: clamp((root.ring-progress - 0.08) / 0.62, 0, 1);
@@ -447,103 +452,121 @@ export component CapsuleWindow inherits Window {
         y: root.hero-y + root.ring-offset(index) * self.travel - self.trail-height;
         width: 3px; height: self.trail-height; border-radius: 1.5px;
         background: service.accent;
-        opacity: clamp(self.travel * 8, 0, 1) * (1 - root.ring-phase(index)) * root.visibility;
+        opacity: root.external-rings ? 0 : clamp(self.travel * 8, 0, 1) * (1 - root.ring-phase(index)) * root.visibility;
         drop-shadow-blur: 5px; drop-shadow-color: service.accent;
     }
     // Clip the full-size layout to the growing shell instead of compressing text.
     Rectangle {
-        x: 12px; y: surface.y; width: root.width - 24px; height: surface.height;
-        background: transparent; clip: true;
+        width: root.width; height: root.height; background: transparent;
         opacity: root.surface-opacity * root.visibility;
-        TouchArea {
-            enabled: root.revealed;
-            x: 0px; y: 0px; width: parent.width; height: 16px; mouse-cursor: pointer;
-            pointer-event(event) => {
-                if event.button == PointerEventButton.left && event.kind == PointerEventKind.down { root.start-drag(); }
-                if event.button == PointerEventButton.right && event.kind == PointerEventKind.down { root.show-menu(self.mouse-x + 12px, self.mouse-y + surface.y); }
+        Rectangle {
+            x: 12px; y: surface.y; width: root.width - 24px; height: surface.height;
+            background: transparent; clip: true;
+            TouchArea {
+                enabled: root.revealed;
+                x: 0px; y: 0px; width: parent.width; height: 16px; mouse-cursor: pointer;
+                pointer-event(event) => {
+                    if event.button == PointerEventButton.left && event.kind == PointerEventKind.down { root.start-drag(); }
+                    if event.button == PointerEventButton.right && event.kind == PointerEventKind.down { root.show-menu(self.mouse-x + 12px, self.mouse-y + surface.y); }
+                }
+            }
+            VerticalLayout {
+                x: 0px; y: 0px; width: parent.width;
+                height: root.height - 24px - (16px - root.logo-top);
+                padding-top: root.logo-top; padding-bottom: 16px; padding-left: 4px; padding-right: 4px; spacing: 0px;
+                HorizontalLayout {
+                    height: root.logo-size; alignment: center;
+                    Rectangle {
+                        width: root.logo-size; height: root.logo-size;
+                        property <float> hover-scale: root.logo-dragging ? 0.97 : (logo-hit.has-hover ? 1.02 : 1);
+                        animate hover-scale { duration: root.animated ? 125ms : 0ms; easing: ease-out; }
+                        Rectangle {
+                            x: -2px; y: -2px; width: parent.width + 4px; height: parent.height + 4px;
+                            border-radius: self.width / 2; background: #284b42;
+                            opacity: root.logo-dragging ? 0.22 : (logo-hit.has-hover ? 0.10 : 0);
+                            animate opacity { duration: root.animated ? 125ms : 0ms; easing: ease-out; }
+                        }
+                        Image {
+                            width: parent.width * parent.hover-scale * (0.82 + 0.18 * root.motion);
+                            height: self.width;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            // The former standard art now serves compact; use the larger
+                            // source for the in-between 44px logo to keep edges crisp.
+                            source: root.size-mode == 0 ? @image-url("../assets/logo-standard.png") : @image-url("../assets/logo-spacious.png");
+                            image-fit: contain; image-rendering: smooth;
+                        }
+                        logo-hit := TouchArea {
+                            enabled: root.revealed;
+                            x: 0px; y: 0px; width: parent.width; height: parent.height; mouse-cursor: pointer;
+                            pointer-event(event) => {
+                                if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                                    root.logo-down-x = self.mouse-x;
+                                    root.logo-down-y = self.mouse-y;
+                                    root.logo-drag-triggered = false;
+                                }
+                                if event.button == PointerEventButton.right && event.kind == PointerEventKind.down {
+                                    root.logo-drag-triggered = true;
+                                    root.show-menu(self.absolute-position.x - root.absolute-position.x + self.mouse-x,
+                                                   self.absolute-position.y - root.absolute-position.y + self.mouse-y);
+                                }
+                            }
+                            moved => {
+                                if self.pressed && !root.logo-drag-triggered &&
+                                    (self.mouse-x > root.logo-down-x + 7px || self.mouse-x < root.logo-down-x - 7px ||
+                                     self.mouse-y > root.logo-down-y + 7px || self.mouse-y < root.logo-down-y - 7px) {
+                                    root.logo-drag-triggered = true;
+                                    root.logo-dragging = true;
+                                    root.start-drag();
+                                }
+                            }
+                            clicked => { if !root.logo-drag-triggered { root.collapse-to-mini(); } }
+                        }
+                    }
+                }
+                Rectangle { height: root.area-gap; }
+                if root.visible-count == 0: Rectangle {
+                    height: root.item-height;
+                    opacity: clamp((root.motion - 0.25) / 0.75, 0, 1);
+                    Text { text: "未启用\n服务"; color: Tokens.secondary; font-size: root.size-mode == 0 ? 12px : (root.size-mode == 1 ? 13px : 14px); horizontal-alignment: center; vertical-alignment: center; }
+                }
+                for service[index] in root.services: Rectangle {
+                    height: root.item-height;
+                    property <float> entrance: root.ring-phase(index);
+                    property <float> spread: root.spread-phase(index);
+                    QuotaItem {
+                        x: (parent.width - self.width) / 2 + (mod(index, 2) == 0 ? -1 : 1) * 10px * (1 - parent.entrance); y: 0px;
+                        opacity: root.visibility;
+                        transition: parent.entrance;
+                        spread: parent.spread;
+                        highlight: parent.entrance;
+                        render-arc(percent) => { return root.render-arc(percent); }
+                        render-trail(start, span) => { return root.render-trail(start, span); }
+                        service: service; size-mode: root.size-mode;
+                        external-arc: root.external-rings;
+                        preview-pressed: root.preview-pressed-service == service.source-index;
+                        selected: root.selected-index == service.source-index;
+                        animated: root.animated;
+                        interactive: root.revealed && root.motion > 0.85 && parent.spread > 0.95 && parent.entrance > 0.85;
+                        activated => { root.open-service(service.source-index); }
+                        context-requested(x, y) => { root.show-menu(self.absolute-position.x - root.absolute-position.x + x,
+                                                                   self.absolute-position.y - root.absolute-position.y + y); }
+                    }
+                }
             }
         }
-        VerticalLayout {
-            x: 0px; y: 0px; width: parent.width;
-            height: root.height - 24px - (16px - root.logo-top);
-            padding-top: root.logo-top; padding-bottom: 16px; padding-left: 4px; padding-right: 4px; spacing: 0px;
-            HorizontalLayout {
-                height: root.logo-size; alignment: center;
-                Rectangle {
-                    width: root.logo-size; height: root.logo-size;
-                    property <float> hover-scale: root.logo-dragging ? 0.97 : (logo-hit.has-hover ? 1.02 : 1);
-                    animate hover-scale { duration: root.animated ? 125ms : 0ms; easing: ease-out; }
-                    Rectangle {
-                        x: -2px; y: -2px; width: parent.width + 4px; height: parent.height + 4px;
-                        border-radius: self.width / 2; background: #284b42;
-                        opacity: root.logo-dragging ? 0.22 : (logo-hit.has-hover ? 0.10 : 0);
-                        animate opacity { duration: root.animated ? 125ms : 0ms; easing: ease-out; }
-                    }
-                    Image {
-                        width: parent.width * parent.hover-scale * (0.82 + 0.18 * root.motion);
-                        height: self.width;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                        // The former standard art now serves compact; use the larger
-                        // source for the in-between 44px logo to keep edges crisp.
-                        source: root.size-mode == 0 ? @image-url("../assets/logo-standard.png") : @image-url("../assets/logo-spacious.png");
-                        image-fit: contain; image-rendering: smooth;
-                    }
-                    logo-hit := TouchArea {
-                        enabled: root.revealed;
-                        x: 0px; y: 0px; width: parent.width; height: parent.height; mouse-cursor: pointer;
-                        pointer-event(event) => {
-                            if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
-                                root.logo-down-x = self.mouse-x;
-                                root.logo-down-y = self.mouse-y;
-                                root.logo-drag-triggered = false;
-                            }
-                            if event.button == PointerEventButton.right && event.kind == PointerEventKind.down {
-                                root.logo-drag-triggered = true;
-                                root.show-menu(self.absolute-position.x - root.absolute-position.x + self.mouse-x,
-                                               self.absolute-position.y - root.absolute-position.y + self.mouse-y);
-                            }
-                        }
-                        moved => {
-                            if self.pressed && !root.logo-drag-triggered &&
-                                (self.mouse-x > root.logo-down-x + 7px || self.mouse-x < root.logo-down-x - 7px ||
-                                 self.mouse-y > root.logo-down-y + 7px || self.mouse-y < root.logo-down-y - 7px) {
-                                root.logo-drag-triggered = true;
-                                root.logo-dragging = true;
-                                root.start-drag();
-                            }
-                        }
-                        clicked => { if !root.logo-drag-triggered { root.collapse-to-mini(); } }
-                    }
-                }
+        for stroke in root.flow-strokes: Rectangle {
+            width: root.width; height: root.height;
+            background: transparent;
+            Path {
+                width: parent.width; height: parent.height; fit: preserve;
+                commands: stroke.path; stroke: stroke.accent; stroke-width: stroke.width * 2px;
+                stroke-line-cap: round; fill: transparent; opacity: stroke.strength * stroke.halo;
             }
-            Rectangle { height: root.area-gap; }
-            if root.visible-count == 0: Rectangle {
-                height: root.item-height;
-                opacity: clamp((root.motion - 0.25) / 0.75, 0, 1);
-                Text { text: "未启用\n服务"; color: Tokens.secondary; font-size: root.size-mode == 0 ? 12px : (root.size-mode == 1 ? 13px : 14px); horizontal-alignment: center; vertical-alignment: center; }
-            }
-            for service[index] in root.services: Rectangle {
-                height: root.item-height;
-                property <float> entrance: root.ring-phase(index);
-                property <float> spread: root.spread-phase(index);
-                QuotaItem {
-                    x: (parent.width - self.width) / 2 + (mod(index, 2) == 0 ? -1 : 1) * 10px * (1 - parent.entrance); y: 0px;
-                    opacity: root.visibility;
-                    transition: parent.entrance;
-                    spread: parent.spread;
-                    highlight: parent.entrance;
-                    render-arc(percent) => { return root.render-arc(percent); }
-                    render-trail(start, span) => { return root.render-trail(start, span); }
-                    service: service; size-mode: root.size-mode;
-                    preview-pressed: root.preview-pressed-service == service.source-index;
-                    selected: root.selected-index == service.source-index;
-                    animated: root.animated;
-                    interactive: root.revealed && root.motion > 0.85 && parent.spread > 0.95 && parent.entrance > 0.85;
-                    activated => { root.open-service(service.source-index); }
-                    context-requested(x, y) => { root.show-menu(self.absolute-position.x - root.absolute-position.x + x,
-                                                               self.absolute-position.y - root.absolute-position.y + y); }
-                }
+            Path {
+                width: parent.width; height: parent.height; fit: preserve;
+                commands: stroke.path; stroke: stroke.accent; stroke-width: stroke.width * 1px;
+                stroke-line-cap: round; fill: transparent; opacity: stroke.strength;
             }
         }
     }
