@@ -3,7 +3,7 @@
 ## 确定路线
 
 - **Rust**：应用主进程、状态、配置、数据采集和任务调度。
-- **Slint**：圆角胶囊、环形进度、详情和设置等全部 UI 与动画；单独的 SystemTrayIcon 元素。
+- **Slint**：Mini、圆角胶囊、环形进度、详情、设置与图标菜单的 UI 和动画；SystemTrayIcon 仅保留在调试路径。
 - **Win32 API**：桌面工作区计算、窗口的 ToolWindow 属性、窗口锚点定位、拖动、前台激活、当前用户 Run 启动项与系统浏览器入口。
 - **没有 WebView、Node.js、Tauri、React、Chromium**：对低配电脑友好、独立运行。
 
@@ -12,7 +12,7 @@
 ```
 Cargo.toml                  # 唯一 Rust 工程
 build.rs                    # Slint UI 编译与 Windows 图标资源嵌入
-ui/wacu.slint               # 胶囊、详情、设置、系统托盘
+ui/wacu.slint               # Mini、胶囊、详情、设置、图标菜单
 assets/app.ico              # EXE 多尺寸品牌图标
 assets/app-icon.png         # 窗口和托盘品牌图标
 assets/icons/               # 内嵌 SVG 线条图标与服务标记
@@ -28,10 +28,11 @@ scripts/check-startup.ps1   # 弹出／常驻启动显隐检查
 
 ## 窗口
 
-- **CapsuleWindow**：透明背景、无边框、置顶、圆角胶囊。启动先显示，弹出模式约 3 秒后收起，常驻模式保持显示；两种模式均支持 Logo 拖动并共用持久化的桌面位置，松开和切换时即时记录位置，贴边隐藏时记录正常可见位置。
+- **MiniWindow / CapsuleWindow**：正式版启动显示 Mini，左键头像即时展开／收起；透明背景、无边框、置顶。二者独立保存位置，超过 7px 才开始原生拖动。
 - **DetailWindow**：点选某项时弹出，显示多个额度说明及真实接入的预留状态。
 - **SettingsWindow**：常规／服务管理／外观／行为／关于，深色 Fluent 下拉框和滑杆。
-- **WacuTray**：Slint 自带 Windows Shell 系统托盘，保证隐藏窗口时后台事件循环仍存活。
+- **EntryMenuWindow**：Mini 和胶囊共用的 184×116px 深色图标菜单窗口，只有设置和退出两项。右键位置转换为屏幕坐标后限制在工作区内，失焦与 Esc 关闭；隐藏时不绘制。使用独立窗口避免小尺寸入口裁切菜单。
+- **WacuTray**：仅用于 Debug 旧模式检查，正式版不创建。
 
 ## 使用状态
 

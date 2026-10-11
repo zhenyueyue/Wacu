@@ -1,4 +1,4 @@
-param([switch]$Archive)
+param([switch]$Archive, [string[]]$Only)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $exe = Join-Path $root 'target\debug\wacu.exe'
@@ -8,6 +8,8 @@ $configBefore = if (Test-Path -LiteralPath $configPath) { (Get-FileHash -Literal
 $cases = @(
     @{ View = 'mini'; Name = 'mini'; Count = 3; MiniInput = 1 },
     @{ View = 'mini'; Name = 'entry-controls'; Count = 3; EntryControls = 1 },
+    @{ View = 'menu'; Name = 'context-menu'; Count = 3; MenuSelected = -1 },
+    @{ View = 'menu'; Name = 'context-menu-hover'; Count = 3; MenuSelected = 0 },
     @{ View = 'mini'; Name = 'mini-independent-positions'; Count = 3; MiniPositions = 1 },
     @{ View = 'capsule'; Name = 'capsule'; Count = 3 },
     @{ View = 'capsule'; Name = 'capsule-compact'; Count = 3; Size = 0 },
@@ -31,6 +33,7 @@ for ($page = 0; $page -lt $pages.Count; $page++) {
 }
 $cases += @{ View = 'settings'; Name = 'settings-input-check'; Count = 3; Page = 0; Input = 1 }
 foreach ($case in $cases) {
+    if ($Only -and $case.Name -notin $Only) { continue }
     $source = Join-Path $root ('target\wacu-qa-' + $case.View + '.png')
     if (Test-Path -LiteralPath $source) { Remove-Item -LiteralPath $source }
     $start = [System.Diagnostics.ProcessStartInfo]::new($exe)
@@ -44,6 +47,7 @@ foreach ($case in $cases) {
     $start.Environment['WACU_QA_PERIOD'] = [string]$case.Period
     $start.Environment['WACU_QA_SELECTED'] = [string]$case.Selected
     $start.Environment['WACU_QA_SIZE'] = [string]$case.Size
+    if ($case.ContainsKey('MenuSelected')) { $start.Environment['WACU_QA_MENU_SELECTED'] = [string]$case.MenuSelected }
     if ($case.LogoDrag) { $start.Environment['WACU_QA_LOGO_DRAG'] = '1' }
     if ($case.ContainsKey('ServicePressed')) { $start.Environment['WACU_QA_SERVICE_PRESS'] = [string]$case.ServicePressed }
     if ($case.DragDetail) { $start.Environment['WACU_QA_DRAG_DETAIL'] = '1' }

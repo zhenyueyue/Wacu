@@ -325,6 +325,39 @@ fn collapse_entry(
     });
 }
 
+fn show_entry_menu(menu: &EntryMenuWindow, owner: &slint::Window, x: f32, y: f32, animated: bool) {
+    let scale = owner.scale_factor();
+    let origin = owner.position();
+    let anchor = Point {
+        x: origin.x + (x * scale).round() as i32,
+        y: origin.y + (y * scale).round() as i32,
+    };
+    let area = platform_windows::work_area_at(anchor);
+    let target = constrain(
+        Point {
+            x: anchor.x - (8.0 * scale).round() as i32,
+            y: anchor.y - (8.0 * scale).round() as i32,
+        },
+        (
+            (184.0 * scale).round() as i32,
+            (116.0 * scale).round() as i32,
+        ),
+        area,
+    );
+    menu.set_selected(-1);
+    menu.set_animated(animated);
+    menu.window()
+        .set_position(PhysicalPosition::new(target.x, target.y));
+    let _ = menu.show();
+    let size = menu.window().size();
+    let target = constrain(target, (size.width as i32, size.height as i32), area);
+    menu.window()
+        .set_position(PhysicalPosition::new(target.x, target.y));
+    platform_windows::configure_capsule(menu.window());
+    platform_windows::activate(menu.window());
+    menu.invoke_focus_menu();
+}
+
 fn show_capsule(capsule: &CapsuleWindow, prefs: &Rc<RefCell<Preferences>>) {
     capsule.set_revealed(false);
     let _ = capsule.show();
@@ -746,26 +779,8 @@ fn qa_entry_close(
 }
 
 #[cfg(debug_assertions)]
-fn qa_context_command(window: &slint::Window, x: f32, y: f32, row: usize) {
+fn qa_context_command(window: &slint::Window, menu: &EntryMenuWindow, x: f32, y: f32, row: usize) {
     use slint::platform::{PointerEventButton, WindowEvent};
-    // Windows native menus run their own modal message loop. Send test keys
-    // only to this component's HWND, without touching the desktop foreground.
-    let hwnd = platform_windows::native_window(window).unwrap() as usize;
-    let driver = std::thread::spawn(move || {
-        use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_KEYDOWN, WM_KEYUP};
-        std::thread::sleep(Duration::from_millis(100));
-        let keys = if row == 0 {
-            vec![0x1b]
-        } else {
-            std::iter::repeat_n(0x28, row).chain([0x0d]).collect()
-        };
-        for key in keys {
-            unsafe {
-                PostMessageW(hwnd as _, WM_KEYDOWN, key, 1);
-                PostMessageW(hwnd as _, WM_KEYUP, key, 1);
-            }
-        }
-    });
     let position = slint::LogicalPosition::new(x, y);
     window.dispatch_event(WindowEvent::PointerMoved { position });
     window.dispatch_event(WindowEvent::PointerPressed {
@@ -776,19 +791,52 @@ fn qa_context_command(window: &slint::Window, x: f32, y: f32, row: usize) {
         position,
         button: PointerEventButton::Right,
     });
-    driver.join().unwrap();
+    assert!(
+        menu.window().is_visible(),
+        "Right click must display the complete menu window"
+    );
+    let pos = menu.window().position();
+    let size = menu.window().size();
+    let area = platform_windows::work_area_at(Point { x: pos.x, y: pos.y });
+    assert!(
+        pos.x >= area.left
+            && pos.y >= area.top
+            && pos.x + size.width as i32 <= area.right
+            && pos.y + size.height as i32 <= area.bottom,
+        "Menu must fit completely in the screen work area"
+    );
+    use slint::platform::Key;
+    if row == 1 || (row == 2 && x == 33.0) {
+        qa_click(menu.window(), 70.0, if row == 1 { 33.0 } else { 81.0 });
+        return;
+    }
+    let keys = if row == 0 {
+        vec![Key::Escape]
+    } else {
+        std::iter::repeat_n(Key::DownArrow, row)
+            .chain([Key::Return])
+            .collect()
+    };
+    for key in keys {
+        menu.window()
+            .dispatch_event(WindowEvent::KeyPressed { text: key.into() });
+        menu.window()
+            .dispatch_event(WindowEvent::KeyReleased { text: key.into() });
+    }
 }
 
 #[cfg(debug_assertions)]
 fn qa_menu_actions<C: ComponentHandle + 'static>(
     entry: &C,
+    menu: &EntryMenuWindow,
     settings: &SettingsWindow,
     point: (f32, f32),
     exits: Rc<Cell<i32>>,
     done: impl FnOnce() + 'static,
 ) {
-    qa_context_command(entry.window(), point.0, point.1, 1);
+    qa_context_command(entry.window(), menu, point.0, point.1, 1);
     let entry = entry.as_weak();
+    let menu = menu.as_weak();
     let settings = settings.as_weak();
     Timer::single_shot(Duration::from_millis(50), move || {
         let view = entry.upgrade().unwrap();
@@ -799,22 +847,27 @@ fn qa_menu_actions<C: ComponentHandle + 'static>(
         );
         let _ = settings_view.hide();
         let before = exits.get();
-        qa_context_command(view.window(), point.0, point.1, 2);
+        qa_context_command(view.window(), &menu.upgrade().unwrap(), point.0, point.1, 2);
         Timer::single_shot(Duration::from_millis(50), move || {
             let _ = entry.upgrade().unwrap();
             assert_eq!(exits.get(), before + 1, "Second menu item must invoke exit");
+            let _ = menu.upgrade().unwrap().hide();
             done();
         });
     });
 }
 
 #[cfg(debug_assertions)]
-fn qa_entry_controls(mini: &MiniWindow, capsule: &CapsuleWindow, settings: &SettingsWindow) {
+fn qa_entry_controls(
+    mini: &MiniWindow,
+    capsule: &CapsuleWindow,
+    settings: &SettingsWindow,
+    menu: &EntryMenuWindow,
+) {
     let exits = Rc::new(Cell::new(0));
     let captured = exits.clone();
-    mini.on_exit_app(move || captured.set(captured.get() + 1));
-    let captured = exits.clone();
-    capsule.on_exit_app(move || captured.set(captured.get() + 1));
+    menu.on_exit_app(move || captured.set(captured.get() + 1));
+    let menu = menu.as_weak();
     let m = mini.as_weak();
     let c = capsule.as_weak();
     let s = settings.as_weak();
@@ -838,21 +891,51 @@ fn qa_entry_controls(mini: &MiniWindow, capsule: &CapsuleWindow, settings: &Sett
             let c2 = c.clone();
             let s2 = s.clone();
             let exits2 = exits.clone();
-            qa_menu_actions(&capsule, &settings, (x, 100.0), exits, move || {
-                let capsule = c2.upgrade().unwrap();
-                qa_click(capsule.window(), x, 49.0);
-                assert!(
-                    m2.upgrade().unwrap().window().is_visible(),
-                    "Left click must show Mini synchronously"
-                );
-                Timer::single_shot(Duration::from_millis(240), move || {
-                    let mini = m2.upgrade().unwrap();
-                    let settings = s2.upgrade().unwrap();
-                    qa_menu_actions(&mini, &settings, (33.0, 33.0), exits2, move || {
-                        eprintln!("WACU_QA entry_immediate_menu_pass");
+            let menu2 = menu.clone();
+            qa_menu_actions(
+                &capsule,
+                &menu.upgrade().unwrap(),
+                &settings,
+                (x, 100.0),
+                exits,
+                move || {
+                    let capsule = c2.upgrade().unwrap();
+                    qa_click(capsule.window(), x, 49.0);
+                    assert!(
+                        m2.upgrade().unwrap().window().is_visible(),
+                        "Left click must show Mini synchronously"
+                    );
+                    Timer::single_shot(Duration::from_millis(240), move || {
+                        let mini = m2.upgrade().unwrap();
+                        let settings = s2.upgrade().unwrap();
+                        let mini3 = mini.as_weak();
+                        let menu3 = menu2.clone();
+                        qa_menu_actions(
+                            &mini,
+                            &menu2.upgrade().unwrap(),
+                            &settings,
+                            (33.0, 33.0),
+                            exits2,
+                            move || {
+                                let mini = mini3.upgrade().unwrap();
+                                mini.invoke_show_menu(33.0, 33.0);
+                                let menu = menu3.upgrade().unwrap();
+                                menu.window().dispatch_event(
+                                    slint::platform::WindowEvent::WindowActiveChanged(true),
+                                );
+                                menu.window().dispatch_event(
+                                    slint::platform::WindowEvent::WindowActiveChanged(false),
+                                );
+                                assert!(
+                                    !menu.window().is_visible(),
+                                    "Clicking away must dismiss the menu on focus loss"
+                                );
+                                eprintln!("WACU_QA entry_immediate_menu_pass");
+                            },
+                        );
                     });
-                });
-            });
+                },
+            );
         });
     });
 }
@@ -869,6 +952,28 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut initial = initial;
     #[cfg(debug_assertions)]
     let qa_view = std::env::var("WACU_QA_VIEW").unwrap_or_default();
+    #[cfg(debug_assertions)]
+    if qa_view == "menu" {
+        let preview = EntryMenuWindow::new()?;
+        preview.set_selected(
+            std::env::var("WACU_QA_MENU_SELECTED")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(-1),
+        );
+        let weak = preview.as_weak();
+        Timer::single_shot(Duration::from_millis(200), move || {
+            qa_entry_frame(weak.upgrade().unwrap().window(), "menu-preview");
+            std::fs::copy(
+                "target/qa-entry-menu-preview.png",
+                "target/wacu-qa-menu.png",
+            )
+            .unwrap();
+            let _ = slint::quit_event_loop();
+        });
+        preview.run()?;
+        return Ok(());
+    }
     #[cfg(debug_assertions)]
     if std::env::var_os("WACU_QA_ENTRY_MOTION").is_some() {
         let size = std::env::var("WACU_QA_SIZE")?.parse::<u8>()?.min(2);
@@ -948,6 +1053,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let capsule = CapsuleWindow::new()?;
     let mini = MiniWindow::new()?;
     mini.set_animated(initial.animations_enabled);
+    let menu = EntryMenuWindow::new()?;
     let settings = SettingsWindow::new()?;
     let detail = DetailWindow::new()?;
     #[cfg(debug_assertions)]
@@ -963,8 +1069,56 @@ fn main() -> Result<(), Box<dyn Error>> {
     capsule.set_services(ModelRc::from(model.clone()));
     refresh_model(&model, &capsule, &settings, &initial);
 
-    // Desktop Mini is the sole launcher in production. Switching windows does
-    // not allocate a second renderer, add a background thread, or use Explorer.
+    {
+        let view = menu.as_weak();
+        menu.on_dismiss(move || {
+            if let Some(menu) = view.upgrade() {
+                let _ = menu.hide();
+            }
+        });
+        let view = menu.as_weak();
+        let settings = settings.as_weak();
+        menu.on_open_settings(move || {
+            if let Some(menu) = view.upgrade() {
+                let _ = menu.hide();
+            }
+            if let Some(settings) = settings.upgrade() {
+                show_settings(&settings);
+            }
+        });
+        menu.on_exit_app(|| {
+            let _ = slint::quit_event_loop();
+        });
+        let view = menu.as_weak();
+        let owner = mini.as_weak();
+        mini.on_request_menu(move |x, y| {
+            if let (Some(menu), Some(owner)) = (view.upgrade(), owner.upgrade()) {
+                show_entry_menu(&menu, owner.window(), x, y, owner.get_animated());
+            }
+        });
+        let view = menu.as_weak();
+        mini.on_dismiss_menu(move || {
+            if let Some(menu) = view.upgrade() {
+                let _ = menu.hide();
+            }
+        });
+        let view = menu.as_weak();
+        let owner = capsule.as_weak();
+        capsule.on_request_menu(move |x, y| {
+            if let (Some(menu), Some(owner)) = (view.upgrade(), owner.upgrade()) {
+                show_entry_menu(&menu, owner.window(), x, y, owner.get_animated());
+            }
+        });
+        let view = menu.as_weak();
+        capsule.on_dismiss_menu(move || {
+            if let Some(menu) = view.upgrade() {
+                let _ = menu.hide();
+            }
+        });
+    }
+
+    // Desktop Mini is the sole launcher; the shared menu is shown on demand
+    // in the same process, without background threads or Explorer integration.
     {
         let mini_weak = mini.as_weak();
         let capsule_weak = capsule.as_weak();
@@ -972,6 +1126,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         let motion = entry_motion.clone();
         mini.on_toggle_expanded(move || {
             if let (Some(m), Some(c)) = (mini_weak.upgrade(), capsule_weak.upgrade()) {
+                m.invoke_close_menu();
+                c.invoke_close_menu();
                 expand_entry(&m, &c, &prefs, &motion);
             }
         });
@@ -1009,6 +1165,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let entry_motion = entry_motion.clone();
         capsule.on_collapse_to_mini(move || {
             if let (Some(c), Some(m)) = (cap.upgrade(), weak.upgrade()) {
+                c.invoke_close_menu();
                 if let Some(d) = detail.upgrade() {
                     motion.next();
                     motion.closing.set(false);
@@ -1859,7 +2016,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         match qa_view.as_str() {
             "mini" => {
                 if std::env::var_os("WACU_QA_ENTRY_CONTROLS").is_some() {
-                    qa_entry_controls(&mini, &capsule, &settings);
+                    qa_entry_controls(&mini, &capsule, &settings, &menu);
                 }
                 if std::env::var_os("WACU_QA_ENTRY_MOTION").is_some() {
                     qa_entry_animation(&mini, &capsule, &settings);
@@ -1963,6 +2120,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     });
                 }
                 if std::env::var_os("WACU_QA_MINI_INPUT").is_some() {
+                    let menu = menu.as_weak();
                     let m = mini.as_weak();
                     let c = capsule.as_weak();
                     let settings = settings.as_weak();
@@ -2011,7 +2169,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             assert_eq!(calls.get(), 1, "Mini drag threshold failed");
                             assert!(m.window().is_visible(), "Drag must not expand the capsule");
                             m.set_dragging(false);
-                            qa_context_command(m.window(), 33.0, 33.0, 0);
+                            qa_context_command(m.window(), &menu.upgrade().unwrap(), 33.0, 33.0, 0);
                             assert!(
                                 !settings.window().is_visible(),
                                 "Right click must open the menu without opening settings"

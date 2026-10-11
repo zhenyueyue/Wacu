@@ -52,6 +52,8 @@ component QuotaItem inherits Rectangle {
     in property <bool> interactive: true;
     property <bool> is-pressed: hit.pressed || root.preview-pressed;
     callback activated();
+    callback context-requested(length, length);
+    property <bool> context-click: false;
     in property <int> size-mode: 1;
     property <length> ring-width: root.size-mode == 0 ? 4px : (root.size-mode == 1 ? 4.5px : 5px);
     property <string> ring-path: "M 28 4 A 24 24 0 1 1 28 52 A 24 24 0 1 1 28 4 Z";
@@ -116,7 +118,89 @@ component QuotaItem inherits Rectangle {
         font-family: "Bahnschrift"; font-weight: 500; color: Tokens.text;
         horizontal-alignment: center; vertical-alignment: center;
     }
-    hit := TouchArea { enabled: root.interactive; mouse-cursor: pointer; clicked => { root.activated(); } }
+    hit := TouchArea {
+        enabled: root.interactive; mouse-cursor: pointer;
+        pointer-event(event) => { if event.kind == PointerEventKind.down {
+            root.context-click = event.button == PointerEventButton.right;
+            if root.context-click { root.context-requested(self.mouse-x, self.mouse-y); }
+        } }
+        clicked => { if !root.context-click { root.activated(); } }
+    }
+}
+
+component EntryMenuAction inherits Rectangle {
+    in property <string> caption;
+    in property <image> icon;
+    in property <bool> selected: false;
+    in property <bool> danger: false;
+    in property <bool> animated: true;
+    callback activated();
+    height: 38px; border-radius: 8px;
+    background: hit.pressed ? #33483f : (hit.has-hover || root.selected ? #293b34 : transparent);
+    border-width: 1px; border-color: hit.has-hover || root.selected ? #415b50 : transparent;
+    animate background, border-color { duration: root.animated ? 90ms : 0ms; easing: ease-out; }
+    Rectangle {
+        x: 8px; y: 6px; width: 26px; height: 26px; border-radius: 7px;
+        background: root.danger ? #362b2e : #253b32;
+        Image { x: 5px; y: 5px; width: 16px; height: 16px; source: root.icon;
+            colorize: root.danger ? #e6b2ac : #a3e6ca; image-fit: contain; }
+    }
+    Text { x: 44px; y: 0px; width: parent.width - 52px; height: parent.height;
+        text: root.caption; color: Tokens.text; font-size: 13px; font-weight: 500; vertical-alignment: center; }
+    hit := TouchArea { mouse-cursor: pointer; clicked => { root.activated(); } }
+}
+
+component EntryMenu inherits Rectangle {
+    in property <bool> animated: true;
+    in-out property <int> selected: -1;
+    callback activated(int);
+    callback dismiss();
+    public function focus-menu() { keyboard.focus(); }
+    width: 184px; height: 116px; background: transparent;
+    forward-focus: keyboard;
+    Rectangle {
+        x: 8px; y: 8px; width: parent.width - 16px; height: parent.height - 16px;
+        border-radius: 12px; border-width: 1px; border-color: #414b49;
+        background: @linear-gradient(130deg, #252d2d 0%, #191d20 100%);
+        drop-shadow-blur: 12px; drop-shadow-offset-y: 3px; drop-shadow-color: #00000070;
+        VerticalLayout {
+            padding: 7px; spacing: 4px;
+            EntryMenuAction { caption: "设置"; icon: @image-url("../assets/icons/settings.svg");
+                selected: root.selected == 0; animated: root.animated; activated => { root.activated(0); } }
+            Rectangle { height: 1px; background: #39433f; }
+            EntryMenuAction { caption: "退出"; icon: @image-url("../assets/icons/power.svg"); danger: true;
+                selected: root.selected == 1; animated: root.animated; activated => { root.activated(1); } }
+        }
+    }
+    keyboard := FocusScope {
+        focus-on-click: false;
+        focus-changed-event => { if !self.has-focus { root.dismiss(); } }
+        key-pressed(event) => {
+            if event.text == Key.Escape { root.dismiss(); return accept; }
+            if event.text == Key.DownArrow { root.selected = root.selected == 0 ? 1 : 0; return accept; }
+            if event.text == Key.UpArrow { root.selected = root.selected <= 0 ? 1 : 0; return accept; }
+            if event.text == Key.Return && root.selected >= 0 { root.activated(root.selected); return accept; }
+            return reject;
+        }
+    }
+}
+
+export component EntryMenuWindow inherits Window {
+    title: "Wacu Menu"; width: 184px; height: 116px;
+    background: transparent; no-frame: true; always-on-top: true;
+    default-font-family: "Segoe UI";
+    in property <bool> animated: true;
+    in-out property <int> selected: -1;
+    callback open-settings();
+    callback exit-app();
+    callback dismiss();
+    forward-focus: view;
+    public function focus-menu() { view.focus-menu(); }
+    view := EntryMenu {
+        selected <=> root.selected; animated: root.animated;
+        dismiss => { root.dismiss(); }
+        activated(index) => { if index == 0 { root.open-settings(); } else { root.exit-app(); } }
+    }
 }
 
 // Always-on-top floating entry, independent of the Explorer notification area.
@@ -140,7 +224,10 @@ export component MiniWindow inherits Window {
     callback start-drag();
     callback open-settings();
     callback exit-app();
-    public function close-menu() { context.close(); }
+    callback request-menu(length, length);
+    callback dismiss-menu();
+    public function close-menu() { root.dismiss-menu(); }
+    public function show-menu(x: length, y: length) { root.request-menu(x, y); }
     // A single interaction-driven pulse; no idle animation or frame timer.
     Rectangle {
         x: (root.width - self.width) / 2; y: (root.height - self.height) / 2;
@@ -181,6 +268,7 @@ export component MiniWindow inherits Window {
             }
             if event.kind == PointerEventKind.down && event.button == PointerEventButton.right {
                 root.drag-triggered = true;
+                root.show-menu(self.mouse-x, self.mouse-y);
             }
         }
         moved => {
@@ -193,13 +281,6 @@ export component MiniWindow inherits Window {
             }
         }
         clicked => { if !root.drag-triggered { root.toggle-expanded(); } }
-    }
-    context := ContextMenuArea {
-        enabled: root.revealed;
-        Menu {
-            MenuItem { title: "设置"; activated => { root.open-settings(); } }
-            MenuItem { title: "退出"; activated => { root.exit-app(); } }
-        }
     }
 }
 
@@ -235,7 +316,10 @@ export component CapsuleWindow inherits Window {
     callback open-service(int);
     callback open-settings();
     callback exit-app();
-    public function close-menu() { context.close(); }
+    callback request-menu(length, length);
+    callback dismiss-menu();
+    public function close-menu() { root.dismiss-menu(); }
+    public function show-menu(x: length, y: length) { root.request-menu(x, y); }
     callback start-drag();
     surface := Rectangle {
         x: (root.width - self.width) / 2; y: 12px + 8px * (1 - root.motion);
@@ -245,6 +329,12 @@ export component CapsuleWindow inherits Window {
         background: #1b1c1f;
         opacity: root.surface-opacity * clamp(root.motion * 4, 0, 1);
         drop-shadow-blur: 14px; drop-shadow-offset-y: 4px; drop-shadow-color: root.selected-index >= 0 ? #3b82f633 : #00000050;
+        TouchArea {
+            enabled: root.revealed;
+            pointer-event(event) => { if event.button == PointerEventButton.right && event.kind == PointerEventKind.down {
+                root.show-menu(self.mouse-x + surface.x, self.mouse-y + surface.y);
+            } }
+        }
     }
     Rectangle {
         x: surface.x; y: surface.y; width: surface.width; height: surface.height;
@@ -260,7 +350,10 @@ export component CapsuleWindow inherits Window {
         TouchArea {
             enabled: root.revealed;
             x: 0px; y: 0px; width: parent.width; height: 16px; mouse-cursor: pointer;
-            pointer-event(event) => { if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) { root.start-drag(); } }
+            pointer-event(event) => {
+                if event.button == PointerEventButton.left && event.kind == PointerEventKind.down { root.start-drag(); }
+                if event.button == PointerEventButton.right && event.kind == PointerEventKind.down { root.show-menu(self.mouse-x + 12px, self.mouse-y + surface.y); }
+            }
         }
         VerticalLayout {
             x: 0px; y: 0px; width: parent.width;
@@ -296,6 +389,11 @@ export component CapsuleWindow inherits Window {
                                 root.logo-down-y = self.mouse-y;
                                 root.logo-drag-triggered = false;
                             }
+                            if event.button == PointerEventButton.right && event.kind == PointerEventKind.down {
+                                root.logo-drag-triggered = true;
+                                root.show-menu(self.absolute-position.x - root.absolute-position.x + self.mouse-x,
+                                               self.absolute-position.y - root.absolute-position.y + self.mouse-y);
+                            }
                         }
                         moved => {
                             if self.pressed && !root.logo-drag-triggered &&
@@ -328,6 +426,8 @@ export component CapsuleWindow inherits Window {
                     animated: root.animated;
                     interactive: root.revealed && root.motion > 0.85;
                     activated => { root.open-service(service.source-index); }
+                    context-requested(x, y) => { root.show-menu(self.absolute-position.x - root.absolute-position.x + x,
+                                                               self.absolute-position.y - root.absolute-position.y + y); }
                 }
             }
         }
@@ -339,13 +439,6 @@ export component CapsuleWindow inherits Window {
         width: 2px; height: 40px; border-radius: 1px;
         background: @linear-gradient(180deg, #a3f5d400 0%, #a3f5d4 50%, #a3f5d400 100%);
         opacity: 3 * root.motion * (1 - root.motion);
-    }
-    context := ContextMenuArea {
-        enabled: root.revealed;
-        Menu {
-            MenuItem { title: "设置"; activated => { root.open-settings(); } }
-            MenuItem { title: "退出"; activated => { root.exit-app(); } }
-        }
     }
 }
 
