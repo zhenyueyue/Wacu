@@ -2,6 +2,17 @@
 
 日期：2026-10-12 · 工程版本：v0.2.0 · 目标：Windows x64。
 
+## 2026-10-12 · Claude Code 本地额度接入（真实查询待验收）
+
+- [x] 核实本机 Claude CLI 2.1.252 安装与 `auth status --json` 的 claude.ai/firstParty Pro 登录状态；未输出凭据，未核对 Desktop 登录。
+- [x] 审查 CC Switch `services/subscription.rs`：Windows 读取 CLI OAuth 文件后请求 Anthropic `/api/oauth/usage`，订阅比例与累计 token 统计为不同来源。Wacu 采用 CLI stream-json `get_usage`，不直接读取 Token。
+- [x] 单元测试覆盖控制响应过滤、未知值、百分比、模型周额度、身份/组织切换、API Key、旧数据保留及退出登录清空。
+- [x] `check-claude.ps1` 六项离线样例检查通过：胶囊、快览、完整详情、服务设置、未登录、限流；截图明确标注离线样例，仅写入忽略的 `target/`。
+- [x] 拖动与点击回归六项通过：entry-controls、capsule-logo-drag、quick-detail、detail-animation、settings-input-check、settings-services；偏好文件未改变。
+- [x] 阅读原生完整详情、快览和服务设置截图，未见内容裁切或布局溢出。
+- [ ] 真实 `get_usage` 查询及与 Claude `/usage` 的交叉核对。直接 OAuth 请求曾被自动审批拒绝，尚未取得本地 CLI 联网查询的明确许可；本轮不执行真实请求，不启动新版常驻采集器。
+- [ ] Desktop 与 CLI 账号一致性人工核对；不假设二者同一登录。
+
 ## 2026-10-12 · Codex 真实额度接入
 
 - [x] 使用本机 Codex 的官方 stdio app-server 读取当前 ChatGPT 登录账户，真实返回短周期和每周额度；连续查询读到用量变化。未复制或输出登录 Token，未发起推理任务。

@@ -10,7 +10,7 @@ Windows 轻量 AI 用量守望工具。**现已完全重写为 Rust + Slint + Wi
 - Mini 外围常驻服务配色圆圈：三项各占三分之一、两项各占一半、一项占整圈，交界保留细缝。收起时彩线接回这些等分弧段，再顺时针转满一圈、缓缓停下；旋转期间带轻亮光，单色圈也能看清运动。没有启用服务时不绘制彩圈。
 - 已移除双击操作和单双击等待。右键 Mini 或胶囊弹出紧凑深色圆角菜单：齿轮图标“设置”、电源图标“退出”，无图标底块，轻柔阴影和灰色悬停高亮；菜单外点击或 Esc 可取消。鼠标移动超过 7px 才开始原生拖动，拖动不会误触切换。查看[菜单预览](docs/screenshots/context-menu-hover.png)。
 - EXE 与原生窗口统一使用品牌 Logo；程序内嵌 16–256px 多尺寸 Windows 图标。
-- 胶囊顶部显示品牌 Logo，下方排列 Claude Code、Codex、WorkBuddy，以双眼角色、带背景轨道的进度环和已用百分比显示用量；Codex 使用真实额度，其他两项仍为演示。**已移除底部设置齿轮及其空白**。默认标准档主体宽 72px、圆环 56px；外观页可选择紧凑／标准／宽松三档（窗口宽分别为 88／96／104px）并记住偏好，旧标准升级后自动对应新的紧凑档。
+- 胶囊顶部显示品牌 Logo，下方排列 Claude Code、Codex、WorkBuddy，以双眼角色、带背景轨道的进度环和已用百分比显示用量；Codex 已实测真实额度，Claude Code 已接入本地查询协议、待真实接口验收，WorkBuddy 为演示。**已移除底部设置齿轮及其空白**。默认标准档主体宽 72px、圆环 56px；外观页可选择紧凑／标准／宽松三档（窗口宽分别为 88／96／104px）并记住偏好，旧标准升级后自动对应新的紧凑档。
 - 详情与设置采用紧凑排版：快览 296×422px、完整详情 296×612px、设置 460×600px；正文 13–14px、百分比 32px，使用石墨色渐变、圆角控件和柔和阴影。
 - Mini 和完整胶囊**分别保存自己的位置**（`mini_position` 与 `saved_position`）：Mini 默认停在屏幕右下角，胶囊首次展开默认停在右侧中间。两者可分别拖动，展开/收起后各自回到原位置，不再根据另一窗口坐标重新定位。设置 → 行为可以单独恢复 Mini 或胶囊的默认位置。
 - Mini ↔ 胶囊采用“圆环化线 → 分路汇入 Logo → 沿边缘卷入额度环”：Mini 的服务配色弧段化成短线，途中沿上下分开的轻弧路线运行，在 Logo 周围重新成环，再由同一条路径沿胶囊边缘下行，绕过额度环下沿后转到最终弧段；途中不淡出换线。收起沿同一时间轴反向归拢。路线、弧段数、错位节奏和浮窗高度随当前启用的 0／1／2／3 项服务变化，保留原有颜色与用量。
@@ -20,7 +20,7 @@ Windows 轻量 AI 用量守望工具。**现已完全重写为 Rust + Slint + Wi
 - 点击服务先弹出窄版用量快览，再展开带示意趋势图的完整详情。
 - 深色分栏设置保留开机启动、服务管理、大小、动画、透明度和左右停靠位置。开机启动使用当前用户 Windows Run 注册表项，默认不启用；Mini 不启用旧版托盘弹出/贴边隐藏行为。
 - 详细面板提供今日／7天／30天／全部筛选、24 根示意柱和官网入口。开源／反馈／帮助／检查更新按钮使用系统默认浏览器；当前语言仅提供简体中文，更新入口查看 GitHub Releases，不自动安装。
-- **Codex 已接入本机已登录账户的真实额度；Claude Code、WorkBuddy 与其历史图表仍为演示数据。** Codex 详情显示实际额度窗口，不展示示意趋势图。
+- **Codex 与 Claude Code 按账户额度窗口显示，未知时显示 `--`，不展示示意趋势图；WorkBuddy 仍为演示数据。** Claude Code 的离线解析与界面已验收，真实额度请求尚未验收。
 
 ## Codex 额度
 
@@ -39,6 +39,26 @@ cargo build
 ./target/debug/wacu.exe --codex-usage-check
 ./scripts/check-codex.ps1 # 真实额度的四个原生界面检查，使用隔离偏好
 ```
+
+## Claude Code 额度
+
+Wacu 调用本机 Claude Code CLI 的 stream-json `get_usage` 控制请求，由 CLI 管理登录与额度查询；Wacu 不读取 `.credentials.json` 或发送登录 Token。此协议参考 [Agent HUD 的本地引擎实现](https://github.com/jazzenchen/agent-hud-open/blob/main/Sources/AgentHUDCore/Providers/Claude/ClaudeEngineUsage.swift)，属于内部接口，CLI 更新可能影响兼容性。当前只确认本机 CLI 2.1.252 的安装与登录状态，尚未实测 `get_usage` 返回。
+
+- 查询前后通过 `claude auth status --json` 核对邮箱、组织及认证来源；详情注明 CLI 来源与脱敏账号。读取过程中切换账号会丢弃结果；切换账号后查询失败会清空旧额度，避免显示其他账号的缓存。
+- 读取 CLI 当前登录账号的 5 小时、每周及模型额度；相同账号在网页、CLI、Desktop 的用量[共享订阅限制](https://support.claude.com/en/articles/11647753-how-do-usage-and-length-limits-work)。Desktop 登录身份不会自动视作 CLI 身份，也不会把不同账号的额度相加。
+- 只显示服务返回的比例与重置时间，不推算固定 token 总量。额外用量只显示返回的比例，不推测金额单位。
+- 正常每 5 分钟刷新，错误退避至最长 30 分钟，限流至少等待 15 分钟；设置提供独立刷新按钮。单轮总超时 40 秒。
+- 不提交提示词；关闭 hooks、工具、MCP、插件及会话持久化，在独立工作目录启动隐藏 CLI 子进程。继承 CLI 的环境与 `CLAUDE_CONFIG_DIR`；可用 `WACU_CLAUDE_PATH` 指定原生 `claude.exe`。
+
+```powershell
+cargo build
+./scripts/check-claude.ps1 # 默认离线样例，不读取真实额度
+# 以下会由 CLI 使用现有登录联网查询额度：
+./target/debug/wacu.exe --claude-usage-check
+./scripts/check-claude.ps1 -Live
+```
+
+对照研究：[CC Switch 订阅采集源码](https://github.com/farion1231/cc-switch/blob/main/src-tauri/src/services/subscription.rs)直接读取 CLI OAuth 凭据后请求 Anthropic `/api/oauth/usage`；它的订阅额度与本地累计 token 统计属于不同数据来源。Wacu 当前使用上述本地 CLI 协议，不直接管理凭据。
 
 ## 开发与运行
 
@@ -75,9 +95,9 @@ cargo build --release
 
 ## 性能
 
-- Rust 后台核心；Slint 原生绘图。读取额度时短暂启动 Codex app-server 子进程，请求结束后关闭。
+- Rust 后台核心；Slint 原生绘图。读取额度时短暂启动 Codex app-server 或 Claude CLI 子进程，请求结束后关闭。
 - Mini 原生窗口保持事件循环，无通知区图标；完整胶囊、详情和设置按需显示。
-- 空闲状态无动画帧循环；Codex 额度每两分钟后台查询，停用服务后暂停自动查询。
+- 空闲状态无动画帧循环；Codex 每两分钟、Claude 每五分钟后台查询，停用对应服务后暂停自动查询。
 - 当前 Mini 模式在 Windows 测试机上测得：纯 Mini 常驻私有内存约 67.9 MB、工作集约 72 MB，6 秒静置 CPU 样本 0ms；打开设置期间约 98.8 MB 私有内存。这是初步测试数据，不代表所有老电脑。
 - 后续仍需验证真实鼠标点击响应、旧显卡渲染及长期驻留的稳定性。
 
@@ -85,7 +105,7 @@ cargo build --release
 
 第一阶段：原生 UI、Mini 悬浮入口、单击展开/收起、Win32 拖动与窗口定位、演示用量。
 
-第二阶段：Codex 真实额度已接入；继续验证 Claude Code、WorkBuddy 官方授权可行性。
+第二阶段：Codex 真实额度已接入；Claude Code 本地协议已接入、待真实验收；继续研究 WorkBuddy 授权可行性。
 
 第三阶段：增量采集、缓存、配额提醒、安装包、自动更新。
 

@@ -18,6 +18,9 @@ assets/app-icon.png         # 窗口和托盘品牌图标
 assets/icons/               # 内嵌 SVG 线条图标与服务标记
 src/main.rs                 # UI 状态协调、事件和生命周期
 src/codex.rs                # 本机 Codex app-server 额度采集、窗口解析与错误状态
+src/claude.rs               # Claude CLI get_usage 协议、账户绑定与额度状态
+src/quota.rs                # 共享额度窗口与百分比/重置时间格式
+src/child_process.rs        # Windows Job Object 子进程生命周期
 src/glow.rs                 # 连续高斯圆环光晕
 src/platform_windows.rs     # 小范围 Windows 原生 API 封装
 src/placement.rs            # 可测试的多屏工作区坐标算法
@@ -67,6 +70,18 @@ UI 线程保存最近快照与状态，刷新额度时只更新对应服务行�
 Debug 原生界面 QA 默认禁用网络采集；`scripts/check-codex.ps1` 显式启用只读的真实额度验收，检查圆环、快览、完整详情和服务管理的数据同步。截图保存在忽略的 `target/`；不归档私人额度到仓库。
 
 接口依据：[OpenAI 官方 App Server 文档](https://learn.chatgpt.com/docs/app-server#6-rate-limits-chatgpt)。
+
+## Claude Code 本地额度采集
+
+发现 PATH 中的原生 `claude.exe`、npm 原生二进制、用户 `.local/bin`，支持 `WACU_CLAUDE_PATH`。通过隐藏 CLI 的 `-p --input-format stream-json --output-format stream-json --verbose` 发送单个 `get_usage` 控制请求；不发送模型提示词。启用 safe-mode、禁用 hooks/工具/MCP 与会话持久化，工作目录为 `%LOCALAPPDATA%/Wacu/claude-engine`。认证、代理与 Token 刷新交由 CLI 自身处理，Wacu 不访问凭据文件。
+
+查询前后执行 `auth status --json`，要求 claude.ai/firstParty 登录及可核对的邮箱、组织。账户原始标识仅驻留内存，诊断快照不序列化身份；详情只显示脱敏邮箱和套餐。前后身份不同丢弃本轮结果；相对上次成功快照已切换账号且查询失败时清空旧数据。CLI 来源不会代表 Desktop 已核对，同账号的共享额度无需相加。
+
+解析 5 小时、每周及模型专属窗口，保留空值为未知，`utilization`/`percent` 均为 0–100。`limits[]` 的模型周额度只接受 weekly 组且没有 surface 限制的项目，并覆盖对应旧模型窗口。主环只选择共享 5 小时/每周窗口。额外用量仅显示比例，不推定金额单位。
+
+后台独立工作线程正常每 300 秒刷新；失败退避至 1800 秒，限流至少冷却 900 秒，手动刷新不绕过冷却。40 秒总超时覆盖账户核对与查询，结束后回收子进程，Wacu 退出由共享 Windows Job Object 保证清理。UI 默认未知，不以旧演示百分比填补查询失败。
+
+本地协议参考 [Agent HUD](https://github.com/jazzenchen/agent-hud-open/blob/main/Sources/AgentHUDCore/Providers/Claude/ClaudeEngineUsage.swift)，不是公开稳定 API。另已审查 [CC Switch](https://github.com/farion1231/cc-switch/blob/main/src-tauri/src/services/subscription.rs) 的直接 OAuth HTTP 实现；Wacu 未采用其凭据读取方式。目前真实 `get_usage` 响应尚未验收，默认 QA 使用离线样例并明确标注，只有 `check-claude.ps1 -Live` 显式启用联网验收。
 
 ## 后续统一用量结构
 

@@ -1,10 +1,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod child_process;
+mod claude;
 mod codex;
 mod flow;
 mod glow;
 mod placement;
 mod platform_windows;
+mod quota;
 mod state;
 
 use std::{
@@ -30,6 +33,7 @@ const VALUES: [i32; 3] = [13, 24, 2];
 thread_local! {
     // UI-thread state; the worker sends only quota snapshots, never credentials.
     static CODEX_USAGE: RefCell<codex::UsageState> = RefCell::default();
+    static CLAUDE_USAGE: RefCell<claude::UsageState> = RefCell::default();
 }
 
 fn arc_svg(percent: i32) -> SharedString {
@@ -100,128 +104,231 @@ fn service(index: usize, visible: bool) -> Service {
     };
     if index == 0 {
         CODEX_USAGE.with_borrow(|state| {
-            item.status = state.status().into();
-            item.percent = 0.0;
-            item.percent_text = "--".into();
-            item.arc = "".into();
-            item.glow = slint::Image::default();
-            item.used = "--".into();
-            item.total = "--".into();
-            item.remaining = "--".into();
-            item.reset = "--".into();
-            item.window_label = "额度窗口".into();
-            item.window_summary = "暂不可用".into();
-            item.quota_details = state.status().into();
-            if let Some(snapshot) = &state.snapshot {
-                item.quota_details = snapshot.details().into();
-                if let Some(window) = snapshot.main_window() {
-                    let percent = window.percent().unwrap();
-                    item.percent = percent as f32;
-                    item.percent_text = format!("{percent:.1}%").into();
-                    item.arc = arc_percent(percent as f32);
-                    item.glow = glow::make(percent.round() as i32, tint);
-                    item.used = format!("{percent:.1}%").into();
-                    item.total = "100%".into();
-                    item.remaining = format!("{:.1}%", 100.0 - percent).into();
-                    item.reset = window.reset().into();
-                    item.window_label = window.label().into();
-                    item.window_summary = format!("已用 {percent:.1}%").into();
-                }
-            }
+            fill_quota_service(
+                &mut item,
+                state.status(),
+                state
+                    .snapshot
+                    .as_ref()
+                    .and_then(codex::Snapshot::main_window),
+                state.snapshot.as_ref().map(codex::Snapshot::details),
+            );
         });
+    } else if index == 1 {
+        CLAUDE_USAGE.with_borrow(|state| {
+            fill_quota_service(
+                &mut item,
+                state.status(),
+                state
+                    .snapshot
+                    .as_ref()
+                    .and_then(claude::Snapshot::main_window),
+                state.snapshot.as_ref().map(claude::Snapshot::details),
+            );
+        });
+        #[cfg(debug_assertions)]
+        if std::env::var_os("WACU_QA_CLAUDE_FIXTURE").is_some() {
+            item.status = format!("{}（离线样例）", item.status).into();
+        }
     }
     item
 }
 
-fn start_codex_watcher(
+fn fill_quota_service(
+    item: &mut Service,
+    status: String,
+    window: Option<&quota::QuotaWindow>,
+    details: Option<String>,
+) {
+    item.status = status.clone().into();
+    item.percent = 0.0;
+    item.percent_text = "--".into();
+    item.arc = "".into();
+    item.glow = slint::Image::default();
+    item.used = "--".into();
+    item.total = "--".into();
+    item.remaining = "--".into();
+    item.reset = "--".into();
+    item.window_label = "额度窗口".into();
+    item.window_summary = "暂不可用".into();
+    item.quota_details = details.unwrap_or(status).into();
+    if let Some(window) = window {
+        if let Some(percent) = window.percent() {
+            item.percent = percent as f32;
+            item.percent_text = format!("{percent:.1}%").into();
+            item.arc = arc_percent(percent as f32);
+            item.glow = glow::make(percent.round() as i32, item.accent);
+            item.used = format!("{percent:.1}%").into();
+            item.total = "100%".into();
+            item.remaining = format!("{:.1}%", 100.0 - percent).into();
+            item.reset = window.reset().into();
+            item.window_label = window.label().into();
+            item.window_summary = format!("已用 {percent:.1}%").into();
+        }
+    }
+}
+
+enum UsageResult {
+    Codex(Result<codex::Snapshot, codex::FetchError>),
+    Claude(Result<claude::Snapshot, claude::FetchError>),
+}
+
+fn set_usage_status(
+    settings: &SettingsWindow,
+    index: usize,
+    status: Option<SharedString>,
+    busy: bool,
+) {
+    if index == 0 {
+        if let Some(status) = status {
+            settings.set_codex_status(status);
+        }
+        settings.set_codex_refreshing(busy);
+    } else {
+        if let Some(status) = status {
+            settings.set_claude_status(status);
+        }
+        settings.set_claude_refreshing(busy);
+    }
+}
+
+fn start_usage_watcher(
+    index: usize,
     model: Rc<VecModel<Service>>,
     settings: &SettingsWindow,
     detail: &DetailWindow,
     preferences: Rc<RefCell<Preferences>>,
 ) -> Timer {
     let timer = Timer::default();
-    // Existing visual/input QA stays deterministic and never accesses an account.
+    set_usage_status(settings, index, Some(service(index, true).status), false);
+    let qa_live = if index == 0 {
+        "WACU_QA_CODEX_LIVE"
+    } else {
+        "WACU_QA_CLAUDE_LIVE"
+    };
     if cfg!(debug_assertions)
         && std::env::var_os("WACU_QA_VIEW").is_some()
-        && std::env::var_os("WACU_QA_CODEX_LIVE").is_none()
+        && std::env::var_os(qa_live).is_none()
     {
         return timer;
     }
+    let interval = if index == 0 {
+        codex::REFRESH_INTERVAL
+    } else {
+        claude::REFRESH_INTERVAL
+    };
     let (requests, incoming) = std::sync::mpsc::channel::<()>();
     let (results, outgoing) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
+        let mut claude_account = None;
         while incoming.recv().is_ok() {
-            if results.send(codex::fetch()).is_err() {
+            let result = if index == 0 {
+                UsageResult::Codex(codex::fetch())
+            } else {
+                let result = claude::fetch_for(claude_account.as_ref());
+                if let Ok(snapshot) = &result {
+                    claude_account = snapshot.account.clone();
+                }
+                UsageResult::Claude(result)
+            };
+            if results.send(result).is_err() {
                 break;
             }
         }
     });
     let busy = Rc::new(Cell::new(false));
+    let cooldown = Rc::new(Cell::new(Instant::now()));
     let request = {
         let busy = busy.clone();
+        let cooldown = cooldown.clone();
         Rc::new(move || {
-            if !busy.replace(true) && requests.send(()).is_err() {
-                busy.set(false);
+            if Instant::now() < cooldown.get() || busy.replace(true) {
+                return false;
             }
+            if requests.send(()).is_err() {
+                busy.set(false);
+                return false;
+            }
+            true
         })
     };
-    let status = CODEX_USAGE.with_borrow(codex::UsageState::status);
-    settings.set_codex_status(status.clone().into());
-    settings.set_codex_refreshing(preferences.borrow().shown[0]);
-    if preferences.borrow().shown[0] {
-        request();
+    set_usage_status(settings, index, Some(service(index, true).status), false);
+    if preferences.borrow().shown[index] && request() {
+        set_usage_status(settings, index, None, true);
     }
     {
         let request = request.clone();
         let settings_weak = settings.as_weak();
-        settings.on_refresh_codex(move || {
-            request();
-            if let Some(settings) = settings_weak.upgrade() {
-                settings.set_codex_refreshing(true);
+        let refresh = move || {
+            if request() {
+                if let Some(settings) = settings_weak.upgrade() {
+                    set_usage_status(&settings, index, None, true);
+                }
             }
-        });
+        };
+        if index == 0 {
+            settings.on_refresh_codex(refresh);
+        } else {
+            settings.on_refresh_claude(refresh);
+        }
     }
     let settings = settings.as_weak();
     let detail = detail.as_weak();
-    let mut next_refresh = Instant::now() + codex::REFRESH_INTERVAL;
+    let mut next_refresh = Instant::now() + interval;
     let mut failures = 0u32;
-    let mut was_enabled = preferences.borrow().shown[0];
+    let mut was_enabled = preferences.borrow().shown[index];
     timer.start(TimerMode::Repeated, Duration::from_secs(1), move || {
         if let Ok(result) = outgoing.try_recv() {
-            failures = if result.is_ok() {
-                0
-            } else {
-                (failures + 1).min(4)
+            let (success, retry) = match result {
+                UsageResult::Codex(result) => {
+                    let success = result.is_ok();
+                    CODEX_USAGE.with_borrow_mut(|state| state.apply(result));
+                    (success, None)
+                }
+                UsageResult::Claude(result) => {
+                    let success = result.is_ok();
+                    let retry = result.as_ref().err().and_then(|error| match error {
+                        claude::FetchError::RateLimited(_) => Some(error.retry_after()),
+                        _ => None,
+                    });
+                    CLAUDE_USAGE.with_borrow_mut(|state| state.apply(result));
+                    (success, retry)
+                }
             };
-            next_refresh = Instant::now()
-                + (codex::REFRESH_INTERVAL * (1 << failures)).min(Duration::from_secs(1800));
-            CODEX_USAGE.with_borrow_mut(|state| state.apply(result));
+            failures = if success { 0 } else { (failures + 1).min(4) };
+            let delay =
+                retry.unwrap_or((interval * (1 << failures)).min(Duration::from_secs(1800)));
+            next_refresh = Instant::now() + delay;
+            if retry.is_some() {
+                cooldown.set(next_refresh);
+            }
             busy.set(false);
-            let item = service(0, true);
+            let item = service(index, true);
             for row in 0..model.row_count() {
-                if model.row_data(row).is_some_and(|s| s.source_index == 0) {
+                if model
+                    .row_data(row)
+                    .is_some_and(|s| s.source_index == index as i32)
+                {
                     model.set_row_data(row, item.clone());
                 }
             }
             if let Some(detail) = detail.upgrade() {
-                if detail.get_selected_service().source_index == 0 {
+                if detail.get_selected_service().source_index == index as i32 {
                     detail.set_selected_service(item.clone());
                 }
             }
             if let Some(settings) = settings.upgrade() {
-                settings.set_codex_status(item.status);
-                settings.set_codex_refreshing(false);
+                set_usage_status(&settings, index, Some(item.status), false);
             }
         }
-        let enabled = preferences.borrow().shown[0];
+        let enabled = preferences.borrow().shown[index];
         if enabled && !was_enabled {
             next_refresh = Instant::now();
         }
         was_enabled = enabled;
-        if !busy.get() && enabled && Instant::now() >= next_refresh {
-            request();
+        if !busy.get() && enabled && Instant::now() >= next_refresh && request() {
             if let Some(settings) = settings.upgrade() {
-                settings.set_codex_refreshing(true);
+                set_usage_status(&settings, index, None, true);
             }
         }
     });
@@ -1865,6 +1972,29 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         return Ok(());
     }
+    if std::env::args().any(|arg| arg == "--claude-usage-check") {
+        match claude::fetch() {
+            Ok(snapshot) => println!("{}", serde_json::to_string_pretty(&snapshot)?),
+            Err(error) => return Err(error.message().into()),
+        }
+        return Ok(());
+    }
+    #[cfg(debug_assertions)]
+    if std::env::var_os("WACU_QA_VIEW").is_some() {
+        if let Ok(fixture) = std::env::var("WACU_QA_CLAUDE_FIXTURE") {
+            let result = match fixture.as_str() {
+                "unauthorized" => Err(claude::FetchError::Unauthorized),
+                "rate-limited" => Err(claude::FetchError::RateLimited(900)),
+                "ok" => claude::parse_snapshot(serde_json::json!({
+                    "five_hour":{"utilization":12.5,"resets_at":"2026-10-12T04:00:00+08:00"},
+                    "seven_day":{"utilization":33,"resets_at":"2026-10-18T12:00:00+08:00"},
+                    "seven_day_sonnet":{"utilization":20,"resets_at":"2026-10-18T12:00:00+08:00"}
+                })),
+                _ => return Err("Unknown Claude QA fixture".into()),
+            };
+            CLAUDE_USAGE.with_borrow_mut(|state| state.apply(result));
+        }
+    }
     let owner_handle = Rc::new(Cell::new(0isize));
     let hook_owner = owner_handle.clone();
     use slint::winit_030::winit::platform::windows::WindowAttributesExtWindows;
@@ -2062,7 +2192,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     mini.set_services(ModelRc::from(model.clone()));
     refresh_model(&model, &capsule, &settings, &initial);
     let _codex_watcher =
-        start_codex_watcher(model.clone(), &settings, &detail, preferences.clone());
+        start_usage_watcher(0, model.clone(), &settings, &detail, preferences.clone());
+    let _claude_watcher =
+        start_usage_watcher(1, model.clone(), &settings, &detail, preferences.clone());
 
     {
         let view = menu.as_weak();
@@ -3479,7 +3611,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         let c = capsule.as_weak();
         let d = detail.as_weak();
         let s = settings.as_weak();
-        let snapshot_delay = if std::env::var_os("WACU_QA_CODEX_LIVE").is_some() {
+        let snapshot_delay = if std::env::var_os("WACU_QA_CLAUDE_LIVE").is_some() {
+            43000
+        } else if std::env::var_os("WACU_QA_CODEX_LIVE").is_some() {
             7000
         } else if std::env::var_os("WACU_QA_ENTRY_CONTROLS").is_some() {
             4200 + flow::duration_ms(true, true) - flow::OPEN_MS + flow::duration_ms(true, false)
@@ -3494,6 +3628,42 @@ fn main() -> Result<(), Box<dyn Error>> {
             900
         };
         Timer::single_shot(Duration::from_millis(snapshot_delay), move || {
+            if std::env::var_os("WACU_QA_CLAUDE_LIVE").is_some()
+                || std::env::var_os("WACU_QA_CLAUDE_FIXTURE").is_some()
+            {
+                if std::env::var_os("WACU_QA_CLAUDE_LIVE").is_some() {
+                    CLAUDE_USAGE.with_borrow(|state| {
+                        assert!(
+                            state.error.is_none(),
+                            "Live Claude quota read failed: {}",
+                            state.status()
+                        );
+                        assert!(
+                            state
+                                .snapshot
+                                .as_ref()
+                                .and_then(claude::Snapshot::main_window)
+                                .is_some()
+                        );
+                    });
+                }
+                let expected = service(1, true);
+                let capsule = c.upgrade().unwrap();
+                let actual = (0..capsule.get_services().row_count())
+                    .filter_map(|i| capsule.get_services().row_data(i))
+                    .find(|item| item.source_index == 1)
+                    .unwrap();
+                assert_eq!(actual.percent_text, expected.percent_text);
+                if mode == "quick" || mode == "detail" {
+                    let detail = d.upgrade().unwrap();
+                    assert_eq!(detail.get_selected_service().status, expected.status);
+                    assert_eq!(
+                        detail.get_selected_service().quota_details,
+                        expected.quota_details
+                    );
+                }
+                eprintln!("WACU_QA claude_model_pass");
+            }
             if std::env::var_os("WACU_QA_CODEX_LIVE").is_some() {
                 CODEX_USAGE.with_borrow(|state| {
                     assert!(state.error.is_none(), "Live Codex quota read failed");
@@ -3848,7 +4018,7 @@ mod tests {
 
     #[test]
     fn demo_usage_and_remaining_are_consistent() {
-        for index in 1..3 {
+        for index in 2..3 {
             let item = service(index, true);
             let used: i32 = item.used.parse().unwrap();
             let remaining: i32 = item.remaining.parse().unwrap();
@@ -3882,5 +4052,29 @@ mod tests {
         assert_eq!(service(0, true).percent_text, "--");
         assert!(service(0, true).arc.is_empty());
         CODEX_USAGE.with_borrow_mut(|state| *state = codex::UsageState::default());
+    }
+
+    #[test]
+    fn claude_ui_keeps_its_own_real_snapshot_and_clears_on_logout() {
+        CLAUDE_USAGE.with_borrow_mut(|state| *state = claude::UsageState::default());
+        assert_eq!(service(1, true).percent_text, "--");
+        CLAUDE_USAGE.with_borrow_mut(|state| {
+            state.apply(claude::parse_snapshot(serde_json::json!({
+                "five_hour":{"utilization":12.5}, "seven_day":{"utilization":34}
+            })))
+        });
+        let item = service(1, true);
+        assert_eq!(item.percent, 12.5);
+        assert_eq!(item.remaining, "87.5%");
+        assert_eq!(item.window_label, "5小时额度");
+        assert_eq!(item.arc, arc_percent(12.5));
+        assert!(item.quota_details.contains("每周额度"));
+        CLAUDE_USAGE.with_borrow_mut(|state| state.apply(Err(claude::FetchError::Timeout)));
+        assert_eq!(service(1, true).percent_text, "12.5%");
+        assert!(service(1, true).status.contains("保留上次数据"));
+        CLAUDE_USAGE.with_borrow_mut(|state| state.apply(Err(claude::FetchError::Unauthorized)));
+        assert_eq!(service(1, true).percent_text, "--");
+        assert!(service(1, true).arc.is_empty());
+        CLAUDE_USAGE.with_borrow_mut(|state| *state = claude::UsageState::default());
     }
 }

@@ -1,4 +1,5 @@
 //! Read-only Codex account quota adapter. Credentials stay inside Codex.
+use crate::child_process::ProcessJob;
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -14,44 +15,7 @@ use std::{
 const TIMEOUT: Duration = Duration::from_secs(30);
 pub const REFRESH_INTERVAL: Duration = Duration::from_secs(120);
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct QuotaWindow {
-    pub used_percent: Option<f64>,
-    pub window_duration_mins: Option<i64>,
-    pub resets_at: Option<i64>,
-}
-
-impl QuotaWindow {
-    pub fn percent(&self) -> Option<f64> {
-        self.used_percent
-            .filter(|v| v.is_finite())
-            .map(|v| v.clamp(0.0, 100.0))
-    }
-
-    pub fn label(&self) -> String {
-        match self.window_duration_mins {
-            Some(10080) => "每周额度".into(),
-            Some(n) if n > 0 && n % 1440 == 0 => format!("{}天额度", n / 1440),
-            Some(n) if n > 0 && n % 60 == 0 => format!("{}小时额度", n / 60),
-            Some(n) if n > 0 => format!("{n}分钟额度"),
-            _ => "额度窗口".into(),
-        }
-    }
-
-    pub fn summary(&self) -> String {
-        self.percent()
-            .map(|p| format!("已用 {p:.1}% · 剩余 {:.1}%", 100.0 - p))
-            .unwrap_or_else(|| "额度暂不可用".into())
-    }
-
-    pub fn reset(&self) -> String {
-        self.resets_at
-            .and_then(DateTime::from_timestamp_secs)
-            .map(|date| date.with_timezone(&Local).format("%m/%d %H:%M").to_string())
-            .unwrap_or_else(|| "未提供重置时间".into())
-    }
-}
+pub use crate::quota::QuotaWindow;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -284,48 +248,6 @@ struct Session {
     _job: Option<ProcessJob>,
 }
 
-// Windows closes the job handle even if Wacu exits during a pending request.
-// This prevents a hidden app-server from outliving the watcher process.
-#[cfg(windows)]
-struct ProcessJob(windows_sys::Win32::Foundation::HANDLE);
-
-#[cfg(windows)]
-impl ProcessJob {
-    fn attach(child: &Child) -> Result<Self, FetchError> {
-        use std::os::windows::io::AsRawHandle;
-        use windows_sys::Win32::System::JobObjects::*;
-        unsafe {
-            let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
-            if handle.is_null() {
-                return Err(FetchError::Connection);
-            }
-            let job = Self(handle);
-            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
-            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-            if SetInformationJobObject(
-                handle,
-                JobObjectExtendedLimitInformation,
-                &info as *const _ as *const _,
-                std::mem::size_of_val(&info) as u32,
-            ) == 0
-                || AssignProcessToJobObject(handle, child.as_raw_handle()) == 0
-            {
-                return Err(FetchError::Connection);
-            }
-            Ok(job)
-        }
-    }
-}
-
-#[cfg(windows)]
-impl Drop for ProcessJob {
-    fn drop(&mut self) {
-        unsafe {
-            windows_sys::Win32::Foundation::CloseHandle(self.0);
-        }
-    }
-}
-
 impl Drop for Session {
     fn drop(&mut self) {
         let _ = self.child.kill();
@@ -414,7 +336,8 @@ pub fn fetch() -> Result<Snapshot, FetchError> {
     };
     #[cfg(windows)]
     {
-        session._job = Some(ProcessJob::attach(&session.child)?);
+        session._job =
+            Some(ProcessJob::attach(&session.child).map_err(|_| FetchError::Connection)?);
     }
     session.request(
         1,
