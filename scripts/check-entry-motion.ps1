@@ -1,0 +1,39 @@
+param([switch]$Archive)
+$ErrorActionPreference = 'Stop'
+$taskRoot = Split-Path -Parent $PSScriptRoot
+$configPath = Join-Path $env:APPDATA 'Wacu\preferences.json'
+$configBefore = if (Test-Path -LiteralPath $configPath) { (Get-FileHash -LiteralPath $configPath).Hash } else { $null }
+foreach ($size in 0..2) {
+    foreach ($count in @(0, 1, 3)) {
+        $start = [System.Diagnostics.ProcessStartInfo]::new((Join-Path $taskRoot 'target\debug\wacu.exe'))
+        $start.WorkingDirectory = $taskRoot
+        $start.UseShellExecute = $false
+        $start.CreateNoWindow = $true
+        $start.RedirectStandardError = $true
+        $start.Environment['WACU_QA_VIEW'] = 'mini'
+        $start.Environment['WACU_QA_ENTRY_MOTION'] = '1'
+        $start.Environment['WACU_QA_SIZE'] = [string]$size
+        $start.Environment['WACU_QA_COUNT'] = [string]$count
+        $start.Environment['WACU_QA_EXIT'] = '1'
+        $start.Environment['APPDATA'] = Join-Path $taskRoot "target\qa-entry-profile-$size-$count"
+        $process = [System.Diagnostics.Process]::Start($start)
+        if (!$process.WaitForExit(15000)) {
+            $process.Kill()
+            throw '入口动画检查超时'
+        }
+        $diagnostics = $process.StandardError.ReadToEnd()
+        if ($process.ExitCode -ne 0 -or $diagnostics -notmatch 'entry_unfold_pixels_pass' -or $diagnostics -notmatch 'entry_reversal_disabled_pass') {
+            throw "入口动画检查失败 ($size / $count): $diagnostics"
+        }
+        $process.Dispose()
+        if ($Archive -and $size -eq 1 -and $count -eq 3) {
+            foreach ($frame in @('mini-rest', 'mini-exit', 'open-early', 'open-mid', 'open-rest', 'close-early', 'close-mid', 'mini-return-early', 'mini-return-mid', 'mini-return-rest')) {
+                Copy-Item -LiteralPath (Join-Path $taskRoot "target\qa-entry-$frame.png") -Destination (Join-Path $taskRoot "docs\screenshots\entry-$frame.png") -Force
+            }
+        }
+        Write-Output "动画通过: 尺寸 $size / 服务数 $count；原生帧展开与收起、快速反向、关闭动画立即切换"
+    }
+}
+$configAfter = if (Test-Path -LiteralPath $configPath) { (Get-FileHash -LiteralPath $configPath).Hash } else { $null }
+if ($configBefore -ne $configAfter) { throw '动画检查意外改变了用户配置' }
+Write-Output '用户配置校验: 未改变'

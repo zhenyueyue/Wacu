@@ -29,6 +29,7 @@ component IconButton inherits Rectangle {
     in property <bool> animated: true;
     in property <bool> circular: false;
     in property <bool> preview-pressed: false;
+    in property <bool> interactive: true;
     in property <float> ui-scale: Tokens.panel-scale;
     in property <length> icon-size: 20px * root.ui-scale;
     in property <length> icon-top: (root.height - root.icon-size) / 2;
@@ -40,7 +41,7 @@ component IconButton inherits Rectangle {
     border-color: #52615d;
     animate background { duration: root.animated ? 110ms : 0ms; easing: ease-out; }
     Glyph { x: (parent.width - self.width) / 2; y: root.icon-top; width: root.icon-size; height: root.icon-size; source: root.icon; }
-    hit := TouchArea { mouse-cursor: pointer; clicked => { root.activated(); } }
+    hit := TouchArea { enabled: root.interactive; mouse-cursor: pointer; clicked => { root.activated(); } }
 }
 
 component QuotaItem inherits Rectangle {
@@ -48,6 +49,7 @@ component QuotaItem inherits Rectangle {
     in property <bool> selected: false;
     in property <bool> animated: true;
     in property <bool> preview-pressed: false;
+    in property <bool> interactive: true;
     property <bool> is-pressed: hit.pressed || root.preview-pressed;
     callback activated();
     in property <int> size-mode: 1;
@@ -114,7 +116,7 @@ component QuotaItem inherits Rectangle {
         font-family: "Bahnschrift"; font-weight: 500; color: Tokens.text;
         horizontal-alignment: center; vertical-alignment: center;
     }
-    hit := TouchArea { mouse-cursor: pointer; clicked => { root.activated(); } }
+    hit := TouchArea { enabled: root.interactive; mouse-cursor: pointer; clicked => { root.activated(); } }
 }
 
 // Always-on-top floating entry, independent of the Explorer notification area.
@@ -125,6 +127,11 @@ export component MiniWindow inherits Window {
     icon: @image-url("../assets/app-icon.png");
     in property <bool> animated: true;
     in-out property <bool> revealed: false;
+    out property <float> reveal-progress: root.revealed ? 1 : 0;
+    animate reveal-progress {
+        duration: root.animated ? (root.revealed ? 320ms : 180ms) : 0ms;
+        easing: root.revealed ? cubic-bezier(0.18, 0.9, 0.25, 1.12) : cubic-bezier(0.4, 0, 0.2, 1);
+    }
     in-out property <bool> dragging: false;
     in-out property <bool> drag-triggered: false;
     in-out property <length> down-x: 0px;
@@ -132,16 +139,23 @@ export component MiniWindow inherits Window {
     callback toggle-expanded();
     callback start-drag();
     callback open-settings();
+    // A single interaction-driven pulse; no idle animation or frame timer.
     Rectangle {
-        x: 5px; y: root.revealed ? 5px : 10px;
-        width: 56px; height: 56px; border-radius: 28px;
+        x: (root.width - self.width) / 2; y: (root.height - self.height) / 2;
+        width: 46px + 18px * clamp(root.reveal-progress, 0, 1); height: self.width;
+        border-radius: self.width / 2; border-width: 1px; border-color: #a3f5d4;
+        background: transparent;
+        opacity: 2.4 * clamp(root.reveal-progress * (1 - root.reveal-progress), 0, 1);
+    }
+    Rectangle {
+        x: (root.width - self.width) / 2; y: (root.height - self.height) / 2 + 3px * (1 - root.reveal-progress);
+        width: 56px * (0.72 + 0.28 * root.reveal-progress); height: self.width; border-radius: self.width / 2;
         border-width: 1px;
         border-color: touch.has-hover ? #5e796d : #414b49;
         background: @linear-gradient(130deg, #252d2d 0%, #171b1d 100%);
-        opacity: root.revealed ? 1 : 0;
+        opacity: clamp(root.reveal-progress * 1.8, 0, 1);
         drop-shadow-blur: 9px; drop-shadow-color: #50000000;
         drop-shadow-offset-y: 3px;
-        animate y, opacity { duration: root.animated ? 150ms : 0ms; easing: ease-out; }
         Image {
             width: root.dragging ? 39px : (touch.has-hover ? 44px : 42px);
             height: self.width;
@@ -149,10 +163,12 @@ export component MiniWindow inherits Window {
             y: (parent.height - self.height) / 2;
             source: @image-url("../assets/logo-spacious.png");
             image-fit: contain;
+            transform-rotation: -12deg * (1 - root.reveal-progress);
             animate width, height, x, y { duration: root.animated ? 120ms : 0ms; easing: ease-out; }
         }
     }
     touch := TouchArea {
+        enabled: root.revealed;
         width: parent.width; height: parent.height;
         mouse-cursor: pointer;
         pointer-event(event) => {
@@ -195,6 +211,13 @@ export component CapsuleWindow inherits Window {
     in property <int> visible-count: 3;
     in-out property <int> selected-index: -1;
     in-out property <bool> revealed: false;
+    // The native window stays fixed; only the surface unfolds from its logo.
+    out property <float> reveal-progress: root.revealed ? 1 : 0;
+    animate reveal-progress {
+        duration: root.animated ? (root.revealed ? 420ms : 280ms) : 0ms;
+        easing: root.revealed ? cubic-bezier(0.22, 1, 0.36, 1) : cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    property <float> motion: clamp(root.reveal-progress, 0, 1);
     in property <bool> animated: true;
     in property <float> surface-opacity: 0.95;
     in-out property <bool> logo-dragging: false;
@@ -207,19 +230,34 @@ export component CapsuleWindow inherits Window {
     callback open-service(int);
     callback open-settings();
     callback start-drag();
-    Rectangle {
-        x: 12px; y: root.revealed ? 12px : 18px;
-        width: parent.width - 24px; height: parent.height - 24px;
+    surface := Rectangle {
+        x: (root.width - self.width) / 2; y: 12px + 8px * (1 - root.motion);
+        width: 56px + (root.width - 80px) * root.motion;
+        height: 56px + (root.height - 80px) * root.motion;
         border-radius: self.width / 2; border-width: 1px; border-color: root.selected-index >= 0 ? #3b82f6 : #45494a;
         background: #1b1c1f;
-        opacity: root.revealed ? root.surface-opacity : 0;
+        opacity: root.surface-opacity * clamp(root.motion * 4, 0, 1);
         drop-shadow-blur: 14px; drop-shadow-offset-y: 4px; drop-shadow-color: root.selected-index >= 0 ? #3b82f633 : #00000050;
-        animate y, opacity { duration: root.animated ? 200ms : 0ms; easing: ease-out; }
+    }
+    Rectangle {
+        x: surface.x; y: surface.y; width: surface.width; height: surface.height;
+        border-radius: self.width / 2; border-width: 1px; border-color: #a3f5d4;
+        background: transparent;
+        opacity: 2.2 * root.motion * (1 - root.motion);
+    }
+    // Clip the full-size layout to the growing shell instead of compressing text.
+    Rectangle {
+        x: 12px; y: surface.y; width: root.width - 24px; height: surface.height;
+        background: transparent; clip: true;
+        opacity: root.surface-opacity * clamp(root.motion * 4, 0, 1);
         TouchArea {
+            enabled: root.revealed;
             x: 0px; y: 0px; width: parent.width; height: 16px; mouse-cursor: pointer;
             pointer-event(event) => { if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) { root.start-drag(); } }
         }
         VerticalLayout {
+            x: 0px; y: 0px; width: parent.width;
+            height: root.height - 24px;
             padding-top: 16px; padding-bottom: 16px; padding-left: 4px; padding-right: 4px; spacing: 0px;
             HorizontalLayout {
                 height: root.logo-size; alignment: center;
@@ -243,6 +281,7 @@ export component CapsuleWindow inherits Window {
                         animate width, height, x, y { duration: root.animated ? 125ms : 0ms; easing: ease-out; }
                     }
                     logo-hit := TouchArea {
+                        enabled: root.revealed;
                         x: 0px; y: 0px; width: parent.width; height: parent.height; mouse-cursor: pointer;
                         pointer-event(event) => {
                             if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
@@ -267,19 +306,29 @@ export component CapsuleWindow inherits Window {
             Rectangle { height: root.area-gap; }
             if root.visible-count == 0: Rectangle {
                 height: root.item-height;
+                opacity: clamp((root.motion - 0.25) / 0.75, 0, 1);
                 Text { text: "未启用\n服务"; color: Tokens.secondary; font-size: root.size-mode == 0 ? 12px : (root.size-mode == 1 ? 13px : 14px); horizontal-alignment: center; vertical-alignment: center; }
             }
-            for service in root.services: QuotaItem {
-                service: service; size-mode: root.size-mode;
-                preview-pressed: root.preview-pressed-service == service.source-index;
-                selected: root.selected-index == service.source-index;
-                animated: root.animated;
-                activated => { root.open-service(service.source-index); }
+            for service[index] in root.services: Rectangle {
+                height: root.item-height;
+                property <float> entrance: clamp((root.motion - 0.18 - index * 0.12) / (0.82 - index * 0.12), 0, 1);
+                QuotaItem {
+                    x: (parent.width - self.width) / 2; y: 14px * (1 - parent.entrance);
+                    opacity: parent.entrance;
+                    service: service; size-mode: root.size-mode;
+                    preview-pressed: root.preview-pressed-service == service.source-index;
+                    selected: root.selected-index == service.source-index;
+                    animated: root.animated;
+                    interactive: root.revealed && root.motion > 0.98;
+                    activated => { root.open-service(service.source-index); }
+                }
             }
             Rectangle { height: root.area-gap; }
             HorizontalLayout {
                 height: root.settings-button-size; alignment: center;
+                opacity: clamp((root.motion - 0.6) / 0.4, 0, 1);
                 IconButton {
+                    interactive: root.revealed && root.motion > 0.98;
                     circular: true;
                     preview-pressed: root.preview-settings-pressed;
                     ui-scale: root.size-mode == 0 ? 1.25 : (root.size-mode == 1 ? 1.375 : 1.5);
@@ -290,6 +339,14 @@ export component CapsuleWindow inherits Window {
                 }
             }
         }
+    }
+    // Brief mint edge glints travel down as the capsule opens, up on collapse.
+    for side in [0, 1]: Rectangle {
+        x: surface.x + (side == 0 ? 1px : surface.width - 3px);
+        y: surface.y + 16px + (surface.height - 72px) * root.motion;
+        width: 2px; height: 40px; border-radius: 1px;
+        background: @linear-gradient(180deg, #a3f5d400 0%, #a3f5d4 50%, #a3f5d400 100%);
+        opacity: 3 * root.motion * (1 - root.motion);
     }
 }
 
