@@ -46,11 +46,15 @@ component IconButton inherits Rectangle {
 
 component QuotaItem inherits Rectangle {
     in property <Service> service;
+    in property <float> transition: 1;
+    pure callback render-arc(float) -> string;
     in property <bool> selected: false;
     in property <bool> animated: true;
     in property <bool> preview-pressed: false;
     in property <bool> interactive: true;
     property <bool> is-pressed: hit.pressed || root.preview-pressed;
+    property <float> glow-level: root.is-pressed ? 1 : (root.selected ? 0.94 : 0.82);
+    animate glow-level { duration: root.animated ? 130ms : 0ms; easing: ease-out; }
     callback activated();
     callback context-requested(length, length);
     property <bool> context-click: false;
@@ -64,25 +68,24 @@ component QuotaItem inherits Rectangle {
     background: transparent;
     Rectangle {
         x: (parent.width - self.width) / 2; y: 0px;
-        width: root.size-mode == 0 ? 50px : (root.size-mode == 1 ? 56px : 62px);
+        width: (root.size-mode == 0 ? 50px : (root.size-mode == 1 ? 56px : 62px)) * (0.88 + 0.12 * root.transition);
         height: self.width; border-radius: self.width / 2;
         background: transparent;
         Image {
             width: parent.width * 66 / 50; height: self.width;
             x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
             source: root.service.glow; image-fit: contain; image-rendering: smooth;
-            opacity: root.is-pressed ? 1 : (root.selected ? 0.94 : 0.82);
-            animate opacity { duration: root.animated ? 130ms : 0ms; easing: ease-out; }
+            opacity: root.glow-level * clamp((root.transition - 0.65) / 0.35, 0, 1);
         }
         Path {
             x: 2px; y: 2px; width: parent.width - 4px; height: parent.height - 4px;
-            commands: root.ring-path;
+            commands: root.transition >= 1 ? root.ring-path : root.render-arc(root.transition * 100);
             viewbox-width: 56; viewbox-height: 56;
-            stroke: #3b3e43; stroke-width: root.ring-width; fill: transparent;
+            stroke: #3b3e43; stroke-width: root.ring-width; stroke-line-cap: round; fill: transparent;
         }
         Path {
             x: 2px; y: 2px; width: parent.width - 4px; height: parent.height - 4px;
-            commands: root.service.arc;
+            commands: root.transition >= 1 ? root.service.arc : root.render-arc(root.service.percent * root.transition);
             stroke: root.is-pressed ? root.service.accent.brighter(7%) : root.service.accent;
             viewbox-width: 56; viewbox-height: 56;
             stroke-width: root.ring-width; stroke-line-cap: round; fill: transparent;
@@ -91,7 +94,7 @@ component QuotaItem inherits Rectangle {
         Rectangle {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            width: root.size-mode == 0 ? 28px : (root.size-mode == 1 ? 32px : 36px);
+            width: (root.size-mode == 0 ? 28px : (root.size-mode == 1 ? 32px : 36px)) * (0.90 + 0.10 * root.transition);
             height: self.width; border-radius: self.width / 2;
             background: root.service.source-index == 1 ? (root.is-pressed ? #f3764f : #ff7042) : (root.is-pressed ? root.service.accent.darker(8%) : root.service.accent);
             animate background { duration: root.animated ? 120ms : 0ms; easing: ease-out; }
@@ -117,6 +120,7 @@ component QuotaItem inherits Rectangle {
         font-size: root.size-mode == 0 ? 14px : (root.size-mode == 1 ? 15px : 16px);
         font-family: "Bahnschrift"; font-weight: 500; color: Tokens.text;
         horizontal-alignment: center; vertical-alignment: center;
+        opacity: clamp((root.transition - 0.55) / 0.45, 0, 1);
     }
     hit := TouchArea {
         enabled: root.interactive; mouse-cursor: pointer;
@@ -215,7 +219,6 @@ export component MiniWindow inherits Window {
         duration: root.animated ? (root.revealed ? 180ms : 100ms) : 0ms;
         easing: root.revealed ? cubic-bezier(0.18, 0.9, 0.25, 1.12) : cubic-bezier(0.4, 0, 0.2, 1);
     }
-    property <float> pulse: 4 * clamp(root.reveal-progress, 0, 1) * (1 - clamp(root.reveal-progress, 0, 1));
     in-out property <bool> dragging: false;
     in-out property <bool> drag-triggered: false;
     in-out property <length> down-x: 0px;
@@ -228,15 +231,6 @@ export component MiniWindow inherits Window {
     callback dismiss-menu();
     public function close-menu() { root.dismiss-menu(); }
     public function show-menu(x: length, y: length) { root.request-menu(x, y); }
-    // Two short orbital flashes, driven only by the current handoff.
-    for orbit in [0, 1]: Rectangle {
-        x: (root.width - self.width) / 2; y: (root.height - self.height) / 2;
-        width: (orbit == 0 ? 44px : 50px) + (orbit == 0 ? 20px : 14px) * clamp(root.reveal-progress, 0, 1);
-        height: self.width; border-radius: self.width / 2;
-        border-width: 1px; border-color: orbit == 0 ? #a3f5d4 : #8fa9ff;
-        background: transparent; opacity: root.pulse * (orbit == 0 ? 0.8 : 0.45);
-        drop-shadow-blur: 5px; drop-shadow-color: orbit == 0 ? #a3f5d470 : #8fa9ff50;
-    }
     Rectangle {
         x: (root.width - self.width) / 2; y: (root.height - self.height) / 2 + 3px * (1 - root.reveal-progress);
         width: 56px * (0.72 + 0.28 * root.reveal-progress); height: self.width; border-radius: self.width / 2;
@@ -253,7 +247,6 @@ export component MiniWindow inherits Window {
             y: (parent.height - self.height) / 2;
             source: @image-url("../assets/logo-spacious.png");
             image-fit: contain;
-            transform-rotation: -12deg * (1 - root.reveal-progress);
             animate width, height, x, y { duration: root.animated ? 120ms : 0ms; easing: ease-out; }
         }
     }
@@ -306,13 +299,17 @@ export component CapsuleWindow inherits Window {
         easing: root.revealed ? cubic-bezier(0.22, 1, 0.36, 1) : cubic-bezier(0.4, 0, 0.2, 1);
     }
     property <float> motion: clamp(root.reveal-progress, 0, 1);
-    // The shell responds immediately; the light finishes with a short tail.
-    out property <float> effect-progress: root.revealed ? 1 : 0;
-    animate effect-progress {
-        duration: root.animated ? (root.revealed ? 320ms : 140ms) : 0ms;
-        easing: linear;
+    // The existing quota rings share one reversible timeline with the shell.
+    out property <float> ring-progress: root.revealed ? 1 : 0;
+    animate ring-progress {
+        duration: root.animated ? (root.revealed ? 220ms : 140ms) : 0ms;
+        easing: root.revealed ? linear : cubic-bezier(0.22, 1, 0.36, 1);
     }
-    property <float> energy: 4 * root.effect-progress * (1 - root.effect-progress);
+    pure callback render-arc(float) -> string;
+    public pure function ring-phase(index: int) -> float {
+        let step = clamp((root.ring-progress - index * 0.10) / 0.75, 0, 1);
+        return 1 - (1 - step) * (1 - step) * (1 - step);
+    }
     in property <bool> animated: true;
     in property <float> surface-opacity: 0.95;
     in-out property <bool> logo-dragging: false;
@@ -343,36 +340,6 @@ export component CapsuleWindow inherits Window {
                 root.show-menu(self.mouse-x + surface.x, self.mouse-y + surface.y);
             } }
         }
-    }
-    Rectangle {
-        x: surface.x; y: surface.y; width: surface.width; height: surface.height;
-        border-radius: self.width / 2; border-width: 1px; border-color: #a3f5d4;
-        background: transparent;
-        opacity: 0.75 * root.energy;
-        drop-shadow-blur: 7px; drop-shadow-color: #70e4d055;
-    }
-    // A soft scan wave crosses the shell behind the full-size content.
-    Rectangle {
-        x: surface.x + 5px; y: surface.y + 5px;
-        width: surface.width - 10px; height: surface.height - 10px;
-        border-radius: self.width / 2; background: transparent; clip: true;
-        Rectangle {
-            y: (parent.height + 48px) * root.effect-progress - 48px;
-            width: parent.width; height: 48px;
-            background: @linear-gradient(180deg, #a3f5d400 0%, #a3f5d426 58%, #b3c4ff55 90%, #c6f8f080 100%);
-            opacity: root.energy;
-        }
-    }
-    // Concentric mint / violet rings release from the avatar and fade out.
-    for orbit in [0, 1]: Rectangle {
-        property <float> travel: clamp((root.effect-progress - orbit * 0.12) / (0.72 - orbit * 0.12), 0, 1);
-        width: root.logo-size + 4px + (root.width - root.logo-size - 12px) * self.travel;
-        height: self.width; x: (root.width - self.width) / 2;
-        y: surface.y + 16px + root.logo-size / 2 - self.height / 2;
-        border-radius: self.width / 2; border-width: 1px;
-        border-color: orbit == 0 ? #a3f5d4 : #a9adff;
-        background: transparent; opacity: 0.85 * 4 * self.travel * (1 - self.travel) * root.motion;
-        drop-shadow-blur: 6px; drop-shadow-color: orbit == 0 ? #a3f5d460 : #a9adff50;
     }
     // Clip the full-size layout to the growing shell instead of compressing text.
     Rectangle {
@@ -412,7 +379,6 @@ export component CapsuleWindow inherits Window {
                         // source for the in-between 44px logo to keep edges crisp.
                         source: root.size-mode == 0 ? @image-url("../assets/logo-standard.png") : @image-url("../assets/logo-spacious.png");
                         image-fit: contain; image-rendering: smooth;
-                        transform-rotation: -16deg * (1 - root.motion);
                     }
                     logo-hit := TouchArea {
                         enabled: root.revealed;
@@ -450,12 +416,12 @@ export component CapsuleWindow inherits Window {
             }
             for service[index] in root.services: Rectangle {
                 height: root.item-height;
-                property <float> step: clamp((root.effect-progress - 0.04 - index * 0.09) / 0.42, 0, 1);
-                property <float> entrance: 1 - (1 - self.step) * (1 - self.step) * (1 - self.step);
+                property <float> entrance: root.ring-phase(index);
                 QuotaItem {
-                    x: (parent.width - self.width) / 2 + (index == 1 ? -8px : 8px) * (1 - parent.entrance);
-                    y: -(root.area-gap + 16px + index * root.item-height) * (1 - parent.entrance);
-                    opacity: parent.entrance;
+                    x: (parent.width - self.width) / 2; y: 6px * (1 - parent.entrance);
+                    opacity: clamp(parent.entrance * 3, 0, 1);
+                    transition: parent.entrance;
+                    render-arc(percent) => { return root.render-arc(percent); }
                     service: service; size-mode: root.size-mode;
                     preview-pressed: root.preview-pressed-service == service.source-index;
                     selected: root.selected-index == service.source-index;
@@ -467,22 +433,6 @@ export component CapsuleWindow inherits Window {
                 }
             }
         }
-    }
-    // Paired light trails and tiny sparks travel down, then gather on collapse.
-    for side in [0, 1]: Rectangle {
-        x: surface.x + (side == 0 ? 1px : surface.width - 3px);
-        y: surface.y + 12px + (surface.height - 68px) * root.effect-progress;
-        width: 2px; height: 44px; border-radius: 1px;
-        background: side == 0 ? @linear-gradient(180deg, #a3f5d400 0%, #c2ffe8 50%, #a3f5d400 100%)
-                             : @linear-gradient(180deg, #91aaff00 0%, #b5caff 50%, #91aaff00 100%);
-        opacity: root.energy;
-    }
-    for spark in [0, 1, 2, 3, 4, 5]: Rectangle {
-        x: spark < 3 ? surface.x - 3px : surface.x + surface.width + 1px;
-        y: surface.y + 28px + (surface.height - 52px) * clamp(root.effect-progress * 1.4 - (spark < 3 ? spark : spark - 3) * 0.14, 0, 1);
-        width: 2px; height: 2px; border-radius: 1px;
-        background: spark < 3 ? #bfffe4 : #b8caff;
-        opacity: root.energy * 0.85;
     }
 }
 

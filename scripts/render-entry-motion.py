@@ -31,7 +31,7 @@ for name, duration, label in sequence:
         canvas.alpha_composite(frame, (24, 30))
     frames.append(canvas.convert("RGB"))
     durations.append(duration)
-destination = root / "entry-aurora.gif"
+destination = root / "entry-rings.gif"
 frames[0].save(destination, save_all=True, append_images=frames[1:],
                duration=durations, loop=0, disposal=2)
 with Image.open(destination) as preview:

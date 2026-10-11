@@ -26,17 +26,21 @@ const SUBTITLES: [&str; 3] = ["OpenAI · ChatGPT", "Anthropic · Claude", "Credi
 const VALUES: [i32; 3] = [13, 24, 2];
 
 fn arc_svg(percent: i32) -> SharedString {
-    if percent <= 0 {
+    arc_percent(percent as f32)
+}
+
+fn arc_percent(percent: f32) -> SharedString {
+    if !percent.is_finite() || percent <= 0.0 {
         return "".into();
     }
-    if percent >= 100 {
+    if percent >= 100.0 {
         return "M 28 4 A 24 24 0 1 1 28 52 A 24 24 0 1 1 28 4 Z".into();
     }
-    let f = (percent.min(100) as f64 / 100.0).min(0.99998);
+    let f = (percent as f64 / 100.0).min(0.99998);
     let angle = (-90.0 + f * 360.0).to_radians();
     let end_x = 28.0 + 24.0 * angle.cos();
     let end_y = 28.0 + 24.0 * angle.sin();
-    let large = if percent > 50 { 1 } else { 0 };
+    let large = if percent > 50.0 { 1 } else { 0 };
     format!("M 28 4 A 24 24 0 {large} 1 {end_x:.2} {end_y:.2}").into()
 }
 
@@ -728,6 +732,17 @@ fn qa_entry_animation(mini: &MiniWindow, capsule: &CapsuleWindow, settings: &Set
             let heights = heights.clone();
             Timer::single_shot(Duration::from_millis(delay), move || {
                 let capsule = c.upgrade().unwrap();
+                // Read the phase before GPU readback / PNG encoding. A busy
+                // desktop may deliver a sampling timer after the rings settle.
+                if delay == 80 && capsule.get_visible_count() == 3 {
+                    let progress = capsule.get_ring_progress();
+                    let first = capsule.invoke_ring_phase(0);
+                    let last = capsule.invoke_ring_phase(2);
+                    assert!(first >= last, "Quota rings must follow their visible order");
+                    if progress > 0.2 && progress < 0.75 {
+                        assert!(first > last, "Active ring stages must be staggered");
+                    }
+                }
                 heights
                     .borrow_mut()
                     .push(qa_entry_frame(capsule.window(), name));
@@ -763,10 +778,13 @@ fn qa_entry_animation(mini: &MiniWindow, capsule: &CapsuleWindow, settings: &Set
                         let capsule = c.upgrade().unwrap();
                         qa_entry_frame(capsule.window(), "open-settled");
                         assert_eq!(
-                            capsule.get_effect_progress(),
+                            capsule.get_ring_progress(),
                             1.0,
-                            "Light tail must finish without an idle loop"
+                            "Quota rings must settle without an idle loop"
                         );
+                        for index in 0..capsule.get_visible_count() {
+                            assert_eq!(capsule.invoke_ring_phase(index), 1.0);
+                        }
                         qa_entry_close(
                             &m.upgrade().unwrap(),
                             &capsule,
@@ -858,12 +876,12 @@ fn qa_entry_close(
             assert!(!capsule.window().is_visible());
             assert!(mini.window().is_visible() && mini.get_revealed());
             assert_eq!(mini.get_reveal_progress(), 1.0);
-            assert_eq!(capsule.get_effect_progress(), 0.0);
+            assert_eq!(capsule.get_ring_progress(), 0.0);
             mini.invoke_toggle_expanded();
             assert!(!mini.window().is_visible());
             assert!(capsule.window().is_visible() && capsule.get_revealed());
             assert_eq!(capsule.get_reveal_progress(), 1.0);
-            assert_eq!(capsule.get_effect_progress(), 1.0);
+            assert_eq!(capsule.get_ring_progress(), 1.0);
             capsule.invoke_collapse_to_mini();
             settings.invoke_set_animations(true);
             eprintln!("WACU_QA entry_reversal_disabled_pass");
@@ -1160,6 +1178,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let entry_motion = EntryMotion::default();
 
     let capsule = CapsuleWindow::new()?;
+    capsule.on_render_arc(arc_percent);
     let mini = MiniWindow::new()?;
     mini.set_animated(initial.animations_enabled);
     let menu = EntryMenuWindow::new()?;
@@ -2816,6 +2835,15 @@ mod tests {
         assert!(arc_svg(0).is_empty());
         assert!(arc_svg(100).as_str().ends_with('Z'));
         assert!(!arc_svg(76).as_str().contains("L 0 0"));
+    }
+
+    #[test]
+    fn fractional_arc_preserves_smooth_sweep_and_boundaries() {
+        assert!(arc_percent(0.0).is_empty());
+        assert!(arc_percent(f32::NAN).is_empty());
+        assert!(arc_percent(0.5).as_str().ends_with("28.75 4.01"));
+        assert!(arc_percent(25.0).as_str().ends_with("52.00 28.00"));
+        assert_eq!(arc_percent(100.0), arc_svg(100));
     }
 
     #[test]
