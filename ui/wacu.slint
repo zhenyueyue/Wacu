@@ -215,6 +215,7 @@ export component MiniWindow inherits Window {
         duration: root.animated ? (root.revealed ? 180ms : 100ms) : 0ms;
         easing: root.revealed ? cubic-bezier(0.18, 0.9, 0.25, 1.12) : cubic-bezier(0.4, 0, 0.2, 1);
     }
+    property <float> pulse: 4 * clamp(root.reveal-progress, 0, 1) * (1 - clamp(root.reveal-progress, 0, 1));
     in-out property <bool> dragging: false;
     in-out property <bool> drag-triggered: false;
     in-out property <length> down-x: 0px;
@@ -227,13 +228,14 @@ export component MiniWindow inherits Window {
     callback dismiss-menu();
     public function close-menu() { root.dismiss-menu(); }
     public function show-menu(x: length, y: length) { root.request-menu(x, y); }
-    // A single interaction-driven pulse; no idle animation or frame timer.
-    Rectangle {
+    // Two short orbital flashes, driven only by the current handoff.
+    for orbit in [0, 1]: Rectangle {
         x: (root.width - self.width) / 2; y: (root.height - self.height) / 2;
-        width: 46px + 18px * clamp(root.reveal-progress, 0, 1); height: self.width;
-        border-radius: self.width / 2; border-width: 1px; border-color: #a3f5d4;
-        background: transparent;
-        opacity: 2.4 * clamp(root.reveal-progress * (1 - root.reveal-progress), 0, 1);
+        width: (orbit == 0 ? 44px : 50px) + (orbit == 0 ? 20px : 14px) * clamp(root.reveal-progress, 0, 1);
+        height: self.width; border-radius: self.width / 2;
+        border-width: 1px; border-color: orbit == 0 ? #a3f5d4 : #8fa9ff;
+        background: transparent; opacity: root.pulse * (orbit == 0 ? 0.8 : 0.45);
+        drop-shadow-blur: 5px; drop-shadow-color: orbit == 0 ? #a3f5d470 : #8fa9ff50;
     }
     Rectangle {
         x: (root.width - self.width) / 2; y: (root.height - self.height) / 2 + 3px * (1 - root.reveal-progress);
@@ -304,6 +306,13 @@ export component CapsuleWindow inherits Window {
         easing: root.revealed ? cubic-bezier(0.22, 1, 0.36, 1) : cubic-bezier(0.4, 0, 0.2, 1);
     }
     property <float> motion: clamp(root.reveal-progress, 0, 1);
+    // The shell responds immediately; the light finishes with a short tail.
+    out property <float> effect-progress: root.revealed ? 1 : 0;
+    animate effect-progress {
+        duration: root.animated ? (root.revealed ? 320ms : 140ms) : 0ms;
+        easing: linear;
+    }
+    property <float> energy: 4 * root.effect-progress * (1 - root.effect-progress);
     in property <bool> animated: true;
     in property <float> surface-opacity: 0.95;
     in-out property <bool> logo-dragging: false;
@@ -339,7 +348,31 @@ export component CapsuleWindow inherits Window {
         x: surface.x; y: surface.y; width: surface.width; height: surface.height;
         border-radius: self.width / 2; border-width: 1px; border-color: #a3f5d4;
         background: transparent;
-        opacity: 2.2 * root.motion * (1 - root.motion);
+        opacity: 0.75 * root.energy;
+        drop-shadow-blur: 7px; drop-shadow-color: #70e4d055;
+    }
+    // A soft scan wave crosses the shell behind the full-size content.
+    Rectangle {
+        x: surface.x + 5px; y: surface.y + 5px;
+        width: surface.width - 10px; height: surface.height - 10px;
+        border-radius: self.width / 2; background: transparent; clip: true;
+        Rectangle {
+            y: (parent.height + 48px) * root.effect-progress - 48px;
+            width: parent.width; height: 48px;
+            background: @linear-gradient(180deg, #a3f5d400 0%, #a3f5d426 58%, #b3c4ff55 90%, #c6f8f080 100%);
+            opacity: root.energy;
+        }
+    }
+    // Concentric mint / violet rings release from the avatar and fade out.
+    for orbit in [0, 1]: Rectangle {
+        property <float> travel: clamp((root.effect-progress - orbit * 0.12) / (0.72 - orbit * 0.12), 0, 1);
+        width: root.logo-size + 4px + (root.width - root.logo-size - 12px) * self.travel;
+        height: self.width; x: (root.width - self.width) / 2;
+        y: surface.y + 16px + root.logo-size / 2 - self.height / 2;
+        border-radius: self.width / 2; border-width: 1px;
+        border-color: orbit == 0 ? #a3f5d4 : #a9adff;
+        background: transparent; opacity: 0.85 * 4 * self.travel * (1 - self.travel) * root.motion;
+        drop-shadow-blur: 6px; drop-shadow-color: orbit == 0 ? #a3f5d460 : #a9adff50;
     }
     // Clip the full-size layout to the growing shell instead of compressing text.
     Rectangle {
@@ -362,6 +395,8 @@ export component CapsuleWindow inherits Window {
                 height: root.logo-size; alignment: center;
                 Rectangle {
                     width: root.logo-size; height: root.logo-size;
+                    property <float> hover-scale: root.logo-dragging ? 0.97 : (logo-hit.has-hover ? 1.02 : 1);
+                    animate hover-scale { duration: root.animated ? 125ms : 0ms; easing: ease-out; }
                     Rectangle {
                         x: -2px; y: -2px; width: parent.width + 4px; height: parent.height + 4px;
                         border-radius: self.width / 2; background: #284b42;
@@ -369,15 +404,15 @@ export component CapsuleWindow inherits Window {
                         animate opacity { duration: root.animated ? 125ms : 0ms; easing: ease-out; }
                     }
                     Image {
-                        width: parent.width * (root.logo-dragging ? 0.97 : (logo-hit.has-hover ? 1.02 : 1));
+                        width: parent.width * parent.hover-scale * (0.82 + 0.18 * root.motion);
                         height: self.width;
                         x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
+                        y: (parent.height - self.height) / 2 + 10px * (1 - root.motion);
                         // The former standard art now serves compact; use the larger
                         // source for the in-between 44px logo to keep edges crisp.
                         source: root.size-mode == 0 ? @image-url("../assets/logo-standard.png") : @image-url("../assets/logo-spacious.png");
                         image-fit: contain; image-rendering: smooth;
-                        animate width, height, x, y { duration: root.animated ? 125ms : 0ms; easing: ease-out; }
+                        transform-rotation: -16deg * (1 - root.motion);
                     }
                     logo-hit := TouchArea {
                         enabled: root.revealed;
@@ -415,15 +450,17 @@ export component CapsuleWindow inherits Window {
             }
             for service[index] in root.services: Rectangle {
                 height: root.item-height;
-                property <float> entrance: clamp((root.motion - 0.18 - index * 0.12) / (0.82 - index * 0.12), 0, 1);
+                property <float> step: clamp((root.effect-progress - 0.04 - index * 0.09) / 0.42, 0, 1);
+                property <float> entrance: 1 - (1 - self.step) * (1 - self.step) * (1 - self.step);
                 QuotaItem {
-                    x: (parent.width - self.width) / 2; y: 14px * (1 - parent.entrance);
+                    x: (parent.width - self.width) / 2 + (index == 1 ? -8px : 8px) * (1 - parent.entrance);
+                    y: -(root.area-gap + 16px + index * root.item-height) * (1 - parent.entrance);
                     opacity: parent.entrance;
                     service: service; size-mode: root.size-mode;
                     preview-pressed: root.preview-pressed-service == service.source-index;
                     selected: root.selected-index == service.source-index;
                     animated: root.animated;
-                    interactive: root.revealed && root.motion > 0.85;
+                    interactive: root.revealed && root.motion > 0.85 && parent.entrance > 0.75;
                     activated => { root.open-service(service.source-index); }
                     context-requested(x, y) => { root.show-menu(self.absolute-position.x - root.absolute-position.x + x,
                                                                self.absolute-position.y - root.absolute-position.y + y); }
@@ -431,13 +468,21 @@ export component CapsuleWindow inherits Window {
             }
         }
     }
-    // Brief mint edge glints travel down as the capsule opens, up on collapse.
+    // Paired light trails and tiny sparks travel down, then gather on collapse.
     for side in [0, 1]: Rectangle {
         x: surface.x + (side == 0 ? 1px : surface.width - 3px);
-        y: surface.y + 16px + (surface.height - 72px) * root.motion;
-        width: 2px; height: 40px; border-radius: 1px;
-        background: @linear-gradient(180deg, #a3f5d400 0%, #a3f5d4 50%, #a3f5d400 100%);
-        opacity: 3 * root.motion * (1 - root.motion);
+        y: surface.y + 12px + (surface.height - 68px) * root.effect-progress;
+        width: 2px; height: 44px; border-radius: 1px;
+        background: side == 0 ? @linear-gradient(180deg, #a3f5d400 0%, #c2ffe8 50%, #a3f5d400 100%)
+                             : @linear-gradient(180deg, #91aaff00 0%, #b5caff 50%, #91aaff00 100%);
+        opacity: root.energy;
+    }
+    for spark in [0, 1, 2, 3, 4, 5]: Rectangle {
+        x: spark < 3 ? surface.x - 3px : surface.x + surface.width + 1px;
+        y: surface.y + 28px + (surface.height - 52px) * clamp(root.effect-progress * 1.4 - (spark < 3 ? spark : spark - 3) * 0.14, 0, 1);
+        width: 2px; height: 2px; border-radius: 1px;
+        background: spark < 3 ? #bfffe4 : #b8caff;
+        opacity: root.energy * 0.85;
     }
 }
 

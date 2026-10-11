@@ -669,10 +669,10 @@ fn qa_entry_frame(window: &slint::Window, name: &str) -> usize {
         .unwrap()
         .write_image_data(frame.as_bytes())
         .unwrap();
-    // Count the visible center column, excluding faint shadow pixels.
+    // Count the opaque silhouette, excluding transient glow and shadow pixels.
     let width = frame.width() as usize;
     (0..frame.height() as usize)
-        .filter(|y| frame.as_bytes()[(*y * width + width / 2) * 4 + 3] > 80)
+        .filter(|y| frame.as_bytes()[(*y * width + width / 2) * 4 + 3] > 180)
         .count()
 }
 
@@ -684,7 +684,15 @@ fn qa_entry_animation(mini: &MiniWindow, capsule: &CapsuleWindow, settings: &Set
     let warm = mini.as_weak();
     Timer::single_shot(Duration::from_millis(150), move || {
         if let Some(mini) = warm.upgrade() {
+            // This suite measures handoffs, not the initial app launch. Finish
+            // that reveal explicitly so an occluded startup cannot leave the
+            // first GPU readback at the zero-opacity frame.
+            mini.set_animated(false);
+            mini.set_revealed(false);
+            mini.set_revealed(true);
+            platform_windows::activate(mini.window());
             let _ = mini.window().take_snapshot();
+            mini.set_animated(true);
         }
     });
     let m = mini.as_weak();
@@ -694,6 +702,10 @@ fn qa_entry_animation(mini: &MiniWindow, capsule: &CapsuleWindow, settings: &Set
         let mini = m.upgrade().unwrap();
         let capsule = c.upgrade().unwrap();
         let settled_mini = qa_entry_frame(mini.window(), "mini-rest");
+        assert!(
+            settled_mini > 0,
+            "Mini baseline must contain visible pixels"
+        );
         let mini_position = mini.window().position();
         let capsule_size = capsule.window().size();
         mini.invoke_toggle_expanded();
@@ -703,6 +715,12 @@ fn qa_entry_animation(mini: &MiniWindow, capsule: &CapsuleWindow, settings: &Set
             "Exit must render before hiding Mini"
         );
         let heights = Rc::new(RefCell::new(Vec::new()));
+        for delay in [40, 60, 100, 120, 160, 200, 260, 300] {
+            let c = c.clone();
+            Timer::single_shot(Duration::from_millis(delay), move || {
+                qa_entry_frame(c.upgrade().unwrap().window(), &format!("open-fx-{delay}"));
+            });
+        }
         for (delay, name) in [(30, "open-early"), (80, "open-mid"), (225, "open-rest")] {
             let c = c.clone();
             let m = m.clone();
@@ -740,13 +758,23 @@ fn qa_entry_animation(mini: &MiniWindow, capsule: &CapsuleWindow, settings: &Set
                         "Shell must unfold in rendered frames: {h:?}"
                     );
                     eprintln!("WACU_QA entry_unfold_pixels_pass heights={h:?}");
-                    qa_entry_close(
-                        &m.upgrade().unwrap(),
-                        &capsule,
-                        &s.upgrade().unwrap(),
-                        mini_position,
-                        h[2],
-                    );
+                    let full_height = h[2];
+                    Timer::single_shot(Duration::from_millis(145), move || {
+                        let capsule = c.upgrade().unwrap();
+                        qa_entry_frame(capsule.window(), "open-settled");
+                        assert_eq!(
+                            capsule.get_effect_progress(),
+                            1.0,
+                            "Light tail must finish without an idle loop"
+                        );
+                        qa_entry_close(
+                            &m.upgrade().unwrap(),
+                            &capsule,
+                            &s.upgrade().unwrap(),
+                            mini_position,
+                            full_height,
+                        );
+                    });
                 }
             });
         }
@@ -770,6 +798,12 @@ fn qa_entry_close(
         "Collapsing must begin exit animation"
     );
     let heights = Rc::new(RefCell::new(vec![full_height]));
+    for delay in [20, 50, 110, 130] {
+        let c = c.clone();
+        Timer::single_shot(Duration::from_millis(delay), move || {
+            qa_entry_frame(c.upgrade().unwrap().window(), &format!("close-fx-{delay}"));
+        });
+    }
     // Schedule against the actual collapse, so a busy desktop cannot make the
     // completion assertion run before a delayed click's hide timer.
     for (delay, name) in [(30, "close-early"), (80, "close-mid")] {
@@ -824,10 +858,12 @@ fn qa_entry_close(
             assert!(!capsule.window().is_visible());
             assert!(mini.window().is_visible() && mini.get_revealed());
             assert_eq!(mini.get_reveal_progress(), 1.0);
+            assert_eq!(capsule.get_effect_progress(), 0.0);
             mini.invoke_toggle_expanded();
             assert!(!mini.window().is_visible());
             assert!(capsule.window().is_visible() && capsule.get_revealed());
             assert_eq!(capsule.get_reveal_progress(), 1.0);
+            assert_eq!(capsule.get_effect_progress(), 1.0);
             capsule.invoke_collapse_to_mini();
             settings.invoke_set_animations(true);
             eprintln!("WACU_QA entry_reversal_disabled_pass");
@@ -2500,6 +2536,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             1250
         } else if std::env::var_os("WACU_QA_MINI_POSITIONS").is_some() {
             1800
+        } else if std::env::var_os("WACU_QA_MINI_INPUT").is_some() {
+            1500
         } else {
             900
         };

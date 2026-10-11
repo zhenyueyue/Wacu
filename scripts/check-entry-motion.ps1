@@ -1,10 +1,10 @@
-param([switch]$Archive)
+param([switch]$Archive, [int[]]$Sizes = @(0, 1, 2), [int[]]$Counts = @(0, 1, 3))
 $ErrorActionPreference = 'Stop'
 $taskRoot = Split-Path -Parent $PSScriptRoot
 $configPath = Join-Path $env:APPDATA 'Wacu\preferences.json'
 $configBefore = if (Test-Path -LiteralPath $configPath) { (Get-FileHash -LiteralPath $configPath).Hash } else { $null }
-foreach ($size in 0..2) {
-    foreach ($count in @(0, 1, 3)) {
+foreach ($size in $Sizes) {
+    foreach ($count in $Counts) {
         $start = [System.Diagnostics.ProcessStartInfo]::new((Join-Path $taskRoot 'target\debug\wacu.exe'))
         $start.WorkingDirectory = $taskRoot
         $start.UseShellExecute = $false
@@ -23,11 +23,11 @@ foreach ($size in 0..2) {
         }
         $diagnostics = $process.StandardError.ReadToEnd()
         if ($process.ExitCode -ne 0 -or $diagnostics -notmatch 'entry_unfold_pixels_pass' -or $diagnostics -notmatch 'entry_reversal_disabled_pass') {
-            throw "入口动画检查失败 ($size / $count): $diagnostics"
+            throw "入口动画检查失败 ($size / $count, exit=$($process.ExitCode)): $diagnostics"
         }
         $process.Dispose()
         if ($Archive -and $size -eq 1 -and $count -eq 3) {
-            foreach ($frame in @('mini-rest', 'mini-exit', 'open-early', 'open-mid', 'open-rest', 'close-early', 'close-mid', 'mini-return-early', 'mini-return-mid', 'mini-return-rest')) {
+            foreach ($frame in @('mini-rest', 'mini-exit', 'open-early', 'open-mid', 'open-rest', 'open-settled', 'close-early', 'close-mid', 'mini-return-early', 'mini-return-mid', 'mini-return-rest', 'open-fx-40', 'open-fx-60', 'open-fx-100', 'open-fx-120', 'open-fx-160', 'open-fx-200', 'open-fx-260', 'open-fx-300', 'close-fx-20', 'close-fx-50', 'close-fx-110', 'close-fx-130')) {
                 Copy-Item -LiteralPath (Join-Path $taskRoot "target\qa-entry-$frame.png") -Destination (Join-Path $taskRoot "docs\screenshots\entry-$frame.png") -Force
             }
         }
