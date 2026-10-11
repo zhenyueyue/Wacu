@@ -137,6 +137,7 @@ export component MiniWindow inherits Window {
     in-out property <length> down-x: 0px;
     in-out property <length> down-y: 0px;
     callback toggle-expanded();
+    callback icon-clicked();
     callback start-drag();
     callback open-settings();
     // A single interaction-driven pulse; no idle animation or frame timer.
@@ -191,7 +192,7 @@ export component MiniWindow inherits Window {
                 root.start-drag();
             }
         }
-        clicked => { if !root.drag-triggered { root.toggle-expanded(); } }
+        clicked => { if !root.drag-triggered { root.icon-clicked(); } }
     }
 }
 
@@ -200,11 +201,9 @@ export component CapsuleWindow inherits Window {
     in property <int> size-mode: 1;
     width: root.size-mode == 0 ? 88px : (root.size-mode == 1 ? 96px : 104px);
     property <length> item-height: root.size-mode == 0 ? 70px : (root.size-mode == 1 ? 77px : 84px);
-    property <length> settings-height: root.size-mode == 0 ? 20px : (root.size-mode == 1 ? 22px : 24px);
-    property <length> settings-button-size: root.size-mode == 0 ? 40px : (root.size-mode == 1 ? 44px : 48px);
     property <length> logo-size: root.size-mode == 0 ? 40px : (root.size-mode == 1 ? 44px : 48px);
     property <length> area-gap: root.size-mode == 0 ? 16px : (root.size-mode == 1 ? 18px : 20px);
-    height: 56px + root.logo-size + root.area-gap * 2 + root.settings-button-size + root.item-height * max(1, visible-count);
+    height: 56px + root.logo-size + root.area-gap + root.item-height * max(1, visible-count);
     background: transparent; no-frame: true; always-on-top: true; default-font-family: "Segoe UI";
     icon: @image-url("../assets/app-icon.png");
     in property <[Service]> services;
@@ -225,7 +224,7 @@ export component CapsuleWindow inherits Window {
     in-out property <length> logo-down-x: 0px;
     in-out property <length> logo-down-y: 0px;
     callback collapse-to-mini();
-    in property <bool> preview-settings-pressed: false;
+    callback icon-clicked();
     in property <int> preview-pressed-service: -1;
     callback open-service(int);
     callback open-settings();
@@ -299,7 +298,7 @@ export component CapsuleWindow inherits Window {
                                 root.start-drag();
                             }
                         }
-                        clicked => { if !root.logo-drag-triggered { root.collapse-to-mini(); } }
+                        clicked => { if !root.logo-drag-triggered { root.icon-clicked(); } }
                     }
                 }
             }
@@ -321,21 +320,6 @@ export component CapsuleWindow inherits Window {
                     animated: root.animated;
                     interactive: root.revealed && root.motion > 0.98;
                     activated => { root.open-service(service.source-index); }
-                }
-            }
-            Rectangle { height: root.area-gap; }
-            HorizontalLayout {
-                height: root.settings-button-size; alignment: center;
-                opacity: clamp((root.motion - 0.6) / 0.4, 0, 1);
-                IconButton {
-                    interactive: root.revealed && root.motion > 0.98;
-                    circular: true;
-                    preview-pressed: root.preview-settings-pressed;
-                    ui-scale: root.size-mode == 0 ? 1.25 : (root.size-mode == 1 ? 1.375 : 1.5);
-                    icon-size: root.settings-height;
-                    icon: @image-url("../assets/icons/settings.svg");
-                    animated: root.animated;
-                    activated => { root.open-settings(); }
                 }
             }
         }
@@ -671,7 +655,7 @@ export component SettingsWindow inherits Window {
                                 height: (62px * Tokens.settings-scale);
                                 Text {
                                     x: 0px; height: parent.height; width: parent.width;
-                                    text: "悬浮 Mini：单击展开，点击胶囊顶部头像收起";
+                                    text: "单击头像展开／收起，双击头像打开设置。\n拖动头像可移动窗口。";
                                     color: Tokens.secondary; font-size: (12px * Tokens.settings-scale);
                                     wrap: word-wrap; vertical-alignment: center;
                                 }
@@ -758,7 +742,7 @@ export component SettingsWindow inherits Window {
                             SettingSwitch { label: "显示动画"; hint: "启用悬停、按下和展开过渡"; checked: root.animations-on; animated: root.animations-on; changed(value) => { root.set-animations(value); } }
                             ActionRow { ui-scale: Tokens.settings-scale; caption: "恢复 Mini 默认位置"; animated: root.animations-on; clicked => { root.reset-mini-position(); } }
                              ActionRow { ui-scale: Tokens.settings-scale; caption: "恢复胶囊默认位置"; animated: root.animations-on; clicked => { root.reset-capsule-position(); } }
-                            Text { height: (70px * Tokens.settings-scale); text: "Mini 与胶囊分别记忆桌面位置。\n拖动当前窗口不会移动另一个窗口。"; color: Tokens.secondary; font-size: (12px * Tokens.settings-scale); wrap: word-wrap; }
+                            Text { height: (70px * Tokens.settings-scale); text: "双击 Mini 或胶囊头像打开设置。\n两种窗口分别记忆位置，拖动互不影响。"; color: Tokens.secondary; font-size: (12px * Tokens.settings-scale); wrap: word-wrap; }
                         }
                         if root.selected-page == 4: VerticalLayout {
                             spacing: (16px * Tokens.settings-scale);

@@ -194,6 +194,43 @@ fn remember_mini(mini: &MiniWindow, prefs: &Rc<RefCell<Preferences>>) {
     }
 }
 
+// A double-click must never perform the first single-click action (which
+// would hide the hit target before the second click). Slint's clicked callback
+// fires per completed click, so defer just the icon's single-click action.
+fn icon_double_click_time() -> Duration {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime;
+    Duration::from_millis(unsafe { GetDoubleClickTime() }.clamp(200, 900) as u64)
+}
+
+#[derive(Clone, Default)]
+struct IconClicks {
+    generation: Rc<Cell<u64>>,
+    first_click: Rc<Cell<Option<Instant>>>,
+}
+
+impl IconClicks {
+    // Some(generation) = postpone single click; None = double click.
+    fn register(&self, at: Instant, interval: Duration) -> Option<u64> {
+        let second = self
+            .first_click
+            .get()
+            .is_some_and(|first| at.duration_since(first) <= interval);
+        let generation = self.generation.get().wrapping_add(1);
+        self.generation.set(generation);
+        self.first_click.set(if second { None } else { Some(at) });
+        (!second).then_some(generation)
+    }
+
+    fn pending(&self, generation: u64) -> bool {
+        self.generation.get() == generation && self.first_click.get().is_some()
+    }
+
+    fn cancel(&self) {
+        self.generation.set(self.generation.get().wrapping_add(1));
+        self.first_click.set(None);
+    }
+}
+
 // One generation covers both windows, so a reversed handoff cannot be hidden
 // or re-revealed by timers left over from the previous direction.
 #[derive(Clone, Default)]
@@ -597,7 +634,7 @@ fn qa_entry_animation(mini: &MiniWindow, capsule: &CapsuleWindow, settings: &Set
         let settled_mini = qa_entry_frame(mini.window(), "mini-rest");
         let mini_position = mini.window().position();
         let capsule_size = capsule.window().size();
-        qa_click(mini.window(), 33.0, 33.0);
+        mini.invoke_toggle_expanded();
         assert!(capsule.window().is_visible());
         assert!(
             mini.window().is_visible(),
@@ -658,12 +695,11 @@ fn qa_entry_close(
     let m = mini.as_weak();
     let c = capsule.as_weak();
     let s = settings.as_weak();
-    qa_click(
-        capsule.window(),
-        capsule.window().size().width as f32 / capsule.window().scale_factor() / 2.0,
-        49.0,
+    capsule.invoke_collapse_to_mini();
+    assert!(
+        !capsule.get_revealed(),
+        "Collapsing must begin exit animation"
     );
-    assert!(!capsule.get_revealed(), "Logo click must begin collapse");
     let heights = Rc::new(RefCell::new(vec![full_height]));
     // Schedule against the actual collapse, so a busy desktop cannot make the
     // completion assertion run before a delayed click's hide timer.
@@ -817,6 +853,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let dragging = Rc::new(Cell::new(false));
     let detail_motion = DetailMotion::default();
     let entry_motion = EntryMotion::default();
+    let mini_clicks = IconClicks::default();
+    let capsule_clicks = IconClicks::default();
 
     let capsule = CapsuleWindow::new()?;
     let mini = MiniWindow::new()?;
@@ -851,8 +889,34 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     {
         let weak = mini.as_weak();
+        let setting = settings.as_weak();
+        let clicks = mini_clicks.clone();
+        mini.on_icon_clicked(move || {
+            let delay = icon_double_click_time();
+            if let Some(generation) = clicks.register(Instant::now(), delay) {
+                let weak = weak.clone();
+                let clicks = clicks.clone();
+                Timer::single_shot(delay, move || {
+                    if clicks.pending(generation) {
+                        if let Some(mini) = weak.upgrade() {
+                            if mini.window().is_visible() && mini.get_revealed() {
+                                mini.invoke_toggle_expanded();
+                            }
+                        }
+                        clicks.cancel();
+                    }
+                });
+            } else if let Some(settings) = setting.upgrade() {
+                show_settings(&settings);
+            }
+        });
+    }
+    {
+        let weak = mini.as_weak();
         let prefs = preferences.clone();
+        let clicks = mini_clicks.clone();
         mini.on_start_drag(move || {
+            clicks.cancel();
             let weak = weak.clone();
             let prefs = prefs.clone();
             Timer::single_shot(Duration::from_millis(15), move || {
@@ -866,7 +930,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     {
         let weak = settings.as_weak();
+        let clicks = mini_clicks.clone();
         mini.on_open_settings(move || {
+            clicks.cancel();
             if let Some(s) = weak.upgrade() {
                 show_settings(&s);
             }
@@ -958,10 +1024,36 @@ fn main() -> Result<(), Box<dyn Error>> {
         });
     }
     {
+        let weak = capsule.as_weak();
+        let setting = settings.as_weak();
+        let clicks = capsule_clicks.clone();
+        capsule.on_icon_clicked(move || {
+            let delay = icon_double_click_time();
+            if let Some(generation) = clicks.register(Instant::now(), delay) {
+                let weak = weak.clone();
+                let clicks = clicks.clone();
+                Timer::single_shot(delay, move || {
+                    if clicks.pending(generation) {
+                        if let Some(capsule) = weak.upgrade() {
+                            if capsule.window().is_visible() && capsule.get_revealed() {
+                                capsule.invoke_collapse_to_mini();
+                            }
+                        }
+                        clicks.cancel();
+                    }
+                });
+            } else if let Some(settings) = setting.upgrade() {
+                show_settings(&settings);
+            }
+        });
+    }
+    {
         let weak = settings.as_weak();
         let preview = startup_preview.clone();
+        let clicks = capsule_clicks.clone();
         capsule.on_open_settings(move || {
             preview.set(false);
+            clicks.cancel();
             if let Some(s) = weak.upgrade() {
                 show_settings(&s);
             }
@@ -975,7 +1067,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         let last_open = last_popup_open.clone();
         let detail_weak = detail.as_weak();
         let motion = detail_motion.clone();
+        let clicks = capsule_clicks.clone();
         capsule.on_start_drag(move || {
+            clicks.cancel();
             preview.set(false);
             active_drag.set(true);
             if let Some(c) = weak.upgrade() {
@@ -1519,8 +1613,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                         assert_eq!(d.get_selected_service().source_index, index);
                         d.invoke_close_detail();
                     }
-                    qa_click(c.window(), 44.0, 319.0);
-                    assert!(s.window().is_visible(), "Settings click was intercepted");
+                    c.invoke_open_settings();
+                    assert!(s.window().is_visible(), "Settings callback was intercepted");
                     s.invoke_close_settings();
                     assert_eq!(drag_calls.get(), before, "A button click triggered drag");
                 };
@@ -1709,8 +1803,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         if qa_view == "capsule" {
             capsule.set_logo_dragging(std::env::var_os("WACU_QA_LOGO_DRAG").is_some());
-            capsule
-                .set_preview_settings_pressed(std::env::var_os("WACU_QA_SETTINGS_PRESS").is_some());
             capsule.set_preview_pressed_service(
                 std::env::var("WACU_QA_SERVICE_PRESS")
                     .ok()
@@ -1725,6 +1817,124 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         match qa_view.as_str() {
             "mini" => {
+                if std::env::var_os("WACU_QA_ICON_CLICKS").is_some() {
+                    let m = mini.as_weak();
+                    let c = capsule.as_weak();
+                    let s = settings.as_weak();
+                    Timer::single_shot(Duration::from_millis(230), move || {
+                        let mini = m.upgrade().unwrap();
+                        let capsule = c.upgrade().unwrap();
+                        let settings = s.upgrade().unwrap();
+                        qa_click(mini.window(), 33.0, 33.0);
+                        qa_click(mini.window(), 33.0, 33.0);
+                        assert!(
+                            settings.window().is_visible(),
+                            "Mini double click must open settings"
+                        );
+                        assert!(
+                            !capsule.window().is_visible(),
+                            "Double click must not expand"
+                        );
+                        let m = mini.as_weak();
+                        let c = capsule.as_weak();
+                        let s = settings.as_weak();
+                        Timer::single_shot(
+                            icon_double_click_time() + Duration::from_millis(75),
+                            move || {
+                                let mini = m.upgrade().unwrap();
+                                let capsule = c.upgrade().unwrap();
+                                let settings = s.upgrade().unwrap();
+                                assert!(
+                                    !capsule.window().is_visible(),
+                                    "Pending Mini single click leaked after double click"
+                                );
+                                let _ = settings.hide();
+                                mini.invoke_toggle_expanded();
+                                let m = mini.as_weak();
+                                let c = capsule.as_weak();
+                                let s = settings.as_weak();
+                                Timer::single_shot(Duration::from_millis(470), move || {
+                                    let mini = m.upgrade().unwrap();
+                                    let capsule = c.upgrade().unwrap();
+                                    let settings = s.upgrade().unwrap();
+                                    assert!(capsule.get_revealed());
+                                    let x = capsule.window().size().width as f32
+                                        / capsule.window().scale_factor() as f32
+                                        / 2.0;
+                                    qa_click(capsule.window(), x, 49.0);
+                                    qa_click(capsule.window(), x, 49.0);
+                                    assert!(
+                                        settings.window().is_visible(),
+                                        "Capsule avatar double click must open settings"
+                                    );
+                                    let m = mini.as_weak();
+                                    let c = capsule.as_weak();
+                                    let s = settings.as_weak();
+                                    Timer::single_shot(
+                                        icon_double_click_time() + Duration::from_millis(70),
+                                        move || {
+                                            let mini = m.upgrade().unwrap();
+                                            let capsule = c.upgrade().unwrap();
+                                            let settings = s.upgrade().unwrap();
+                                            assert!(
+                                                capsule.window().is_visible()
+                                                    && capsule.get_revealed(),
+                                                "Double click must not collapse"
+                                            );
+                                            assert!(
+                                                !mini.window().is_visible(),
+                                                "Double click must not restore Mini"
+                                            );
+                                            let _ = settings.hide();
+                                            let x = capsule.window().size().width as f32
+                                                / capsule.window().scale_factor() as f32
+                                                / 2.0;
+                                            qa_click(capsule.window(), x, 49.0);
+                                            let m = mini.as_weak();
+                                            let c = capsule.as_weak();
+                                            Timer::single_shot(
+                                                icon_double_click_time()
+                                                    + Duration::from_millis(420),
+                                                move || {
+                                                    let mini = m.upgrade().unwrap();
+                                                    let capsule = c.upgrade().unwrap();
+                                                    assert!(
+                                                        mini.window().is_visible(),
+                                                        "Capsule single click must restore Mini"
+                                                    );
+                                                    assert!(
+                                                        !capsule.window().is_visible(),
+                                                        "Capsule single click must finish hiding"
+                                                    );
+                                                    qa_click(mini.window(), 33.0, 33.0);
+                                                    let m = mini.as_weak();
+                                                    let c = capsule.as_weak();
+                                                    Timer::single_shot(
+                                                        icon_double_click_time()
+                                                            + Duration::from_millis(110),
+                                                        move || {
+                                                            let mini = m.upgrade().unwrap();
+                                                            let capsule = c.upgrade().unwrap();
+                                                            assert!(
+                                                                capsule.window().is_visible(),
+                                                                "Mini single click must expand"
+                                                            );
+                                                            capsule.invoke_collapse_to_mini();
+                                                            eprintln!(
+                                                                "WACU_QA icon_single_double_pass"
+                                                            );
+                                                            let _ = mini;
+                                                        },
+                                                    );
+                                                },
+                                            );
+                                        },
+                                    );
+                                });
+                            },
+                        );
+                    });
+                }
                 if std::env::var_os("WACU_QA_ENTRY_MOTION").is_some() {
                     qa_entry_animation(&mini, &capsule, &settings);
                 }
@@ -1756,7 +1966,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             pref.mini_position = Some((mini_pos.x, mini_pos.y));
                             pref.saved_position = Some((capsule_pos.x, capsule_pos.y));
                         }
-                        qa_click(m.window(), 33.0, 33.0);
+                        m.invoke_toggle_expanded();
                         assert!(c.window().is_visible());
                         assert_eq!(c.window().position().x, capsule_pos.x);
                         assert_eq!(c.window().position().y, capsule_pos.y);
@@ -1772,7 +1982,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             assert!(m.window().is_visible());
                             assert_eq!(m.window().position().x, mini_pos.x);
                             assert_eq!(m.window().position().y, mini_pos.y);
-                            qa_click(m.window(), 33.0, 33.0);
+                            m.invoke_toggle_expanded();
                             assert_eq!(c.window().position().y, capsule_pos.y);
                             // Simulate native drag to a distinctly different
                             // location and save it on collapse.
@@ -1837,13 +2047,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                         let settings = settings.upgrade().unwrap();
                         assert!(m.window().is_visible());
                         assert!(!c.window().is_visible());
-                        qa_click(m.window(), 33.0, 33.0);
-                        assert!(c.window().is_visible(), "Mini click must expand");
+                        m.invoke_toggle_expanded();
+                        assert!(c.window().is_visible(), "Mini toggle must expand");
                         assert!(!m.get_revealed(), "Mini must begin its exit when expanded");
                         // Top avatar is a click target, but drag remains on >7px motion.
                         let clicking = c.as_weak();
                         Timer::single_shot(Duration::from_millis(60), move || {
-                            qa_click(clicking.upgrade().unwrap().window(), 48.0, 49.0);
+                            clicking.upgrade().unwrap().invoke_collapse_to_mini();
                         });
                         let m2 = m.as_weak();
                         let c2 = c.as_weak();
@@ -2062,8 +2272,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         let c = capsule.as_weak();
         let d = detail.as_weak();
         let s = settings.as_weak();
-        let snapshot_delay = if std::env::var_os("WACU_QA_ENTRY_MOTION").is_some() {
+        let snapshot_delay = if std::env::var_os("WACU_QA_ICON_CLICKS").is_some() {
+            6000
+        } else if std::env::var_os("WACU_QA_ENTRY_MOTION").is_some() {
             2600
+        } else if std::env::var_os("WACU_QA_DETAIL_FADE").is_some() {
+            1250
         } else if std::env::var_os("WACU_QA_MINI_POSITIONS").is_some() {
             1800
         } else {
@@ -2245,6 +2459,50 @@ fn main() -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn icon_clicks_distinguish_single_double_and_cancel() {
+        let clicks = IconClicks::default();
+        let other_icon = IconClicks::default();
+        let start = Instant::now();
+        let interval = Duration::from_millis(500);
+        let first = clicks.register(start, interval).unwrap();
+        assert!(clicks.pending(first));
+        assert_eq!(
+            clicks.register(start + Duration::from_millis(180), interval),
+            None
+        );
+        assert!(
+            !clicks.pending(first),
+            "Double-click must cancel pending toggle"
+        );
+
+        let next = clicks
+            .register(start + Duration::from_millis(800), interval)
+            .unwrap();
+        assert!(clicks.pending(next));
+        assert!(
+            other_icon
+                .register(start + Duration::from_millis(810), interval)
+                .is_some()
+        );
+        clicks.cancel();
+        assert!(
+            !clicks.pending(next),
+            "Right-click/drag should cancel queued toggle"
+        );
+
+        let later = clicks
+            .register(start + Duration::from_millis(1500), interval)
+            .unwrap();
+        assert!(clicks.pending(later));
+        assert_eq!(
+            clicks
+                .register(start + Duration::from_millis(2001), interval)
+                .is_some(),
+            true
+        );
+    }
 
     #[test]
     fn mini_and_capsule_defaults_are_independent() {

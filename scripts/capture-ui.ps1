@@ -7,12 +7,12 @@ $configPath = Join-Path $env:APPDATA 'Wacu\preferences.json'
 $configBefore = if (Test-Path -LiteralPath $configPath) { (Get-FileHash -LiteralPath $configPath).Hash } else { $null }
 $cases = @(
     @{ View = 'mini'; Name = 'mini'; Count = 3; MiniInput = 1 },
+    @{ View = 'mini'; Name = 'mini-icon-clicks'; Count = 3; IconClicks = 1 },
     @{ View = 'mini'; Name = 'mini-independent-positions'; Count = 3; MiniPositions = 1 },
     @{ View = 'capsule'; Name = 'capsule'; Count = 3 },
     @{ View = 'capsule'; Name = 'capsule-compact'; Count = 3; Size = 0 },
     @{ View = 'capsule'; Name = 'capsule-spacious'; Count = 3; Size = 2 },
     @{ View = 'capsule'; Name = 'capsule-logo-drag'; Count = 3; Size = 1; LogoDrag = 1 },
-    @{ View = 'capsule'; Name = 'capsule-gear-pressed'; Count = 3; Size = 1; GearPressed = 1 },
     @{ View = 'capsule'; Name = 'capsule-service-pressed'; Count = 3; Size = 1; ServicePressed = 0 },
     @{ View = 'capsule'; Name = 'capsule-selected'; Count = 3; Selected = 1 },
     @{ View = 'capsule'; Name = 'capsule-empty'; Count = 0 },
@@ -45,11 +45,14 @@ foreach ($case in $cases) {
     $start.Environment['WACU_QA_SELECTED'] = [string]$case.Selected
     $start.Environment['WACU_QA_SIZE'] = [string]$case.Size
     if ($case.LogoDrag) { $start.Environment['WACU_QA_LOGO_DRAG'] = '1' }
-    if ($case.GearPressed) { $start.Environment['WACU_QA_SETTINGS_PRESS'] = '1' }
     if ($case.ContainsKey('ServicePressed')) { $start.Environment['WACU_QA_SERVICE_PRESS'] = [string]$case.ServicePressed }
     if ($case.DragDetail) { $start.Environment['WACU_QA_DRAG_DETAIL'] = '1' }
     if ($case.DetailFade) { $start.Environment['WACU_QA_DETAIL_FADE'] = '1' }
     if ($case.MiniInput) { $start.Environment['WACU_QA_MINI_INPUT'] = '1' }
+    if ($case.IconClicks) {
+        $start.Environment['WACU_QA_ICON_CLICKS'] = '1'
+        $start.Environment['APPDATA'] = Join-Path $root 'target\qa-icon-click-profile'
+    }
     if ($case.MiniPositions) {
         $start.Environment['WACU_QA_MINI_POSITIONS'] = '1'
         $isolatedProfile = Join-Path $root 'target\qa-mini-position-profile'
@@ -74,6 +77,7 @@ foreach ($case in $cases) {
     }
     if ($case.Input -and $diagnostics -notmatch 'WACU_QA input_pass') { throw ('输入检查未通过: ' + $diagnostics) }
     if ($case.MiniInput -and $diagnostics -notmatch 'WACU_QA mini_toggle_drag_settings_pass') { throw ('Mini 交互检查未通过: ' + $diagnostics) }
+    if ($case.IconClicks -and $diagnostics -notmatch 'WACU_QA icon_single_double_pass') { throw ('Mini/胶囊头像单双击检查未通过: ' + $diagnostics) }
     if ($case.MiniPositions -and $diagnostics -notmatch 'WACU_QA mini_independent_positions_pass') { throw ('Mini/胶囊独立位置检查未通过: ' + $diagnostics) }
     if ($case.DragDetail -and $diagnostics -notmatch 'WACU_QA detail_hide_restore_pass') {
         throw ('详情拖动恢复检查未通过: ' + $diagnostics)
