@@ -274,6 +274,9 @@ export component MiniWindow inherits Window {
     in property <bool> flow-active: false;
     in property <bool> external-rings: false;
     in property <float> flow-reveal: 0;
+    in property <float> rim-turn: 0;
+    in property <float> spin-highlight: 0;
+    pure callback render-rim(int, int, float, bool, float, float) -> string;
     pure callback render-trail(float, float) -> string;
     in-out property <bool> revealed: false;
     out property <float> reveal-progress: root.flow-active ? root.flow-reveal : (root.revealed ? 1 : 0);
@@ -314,12 +317,20 @@ export component MiniWindow inherits Window {
             animate width, height, x, y { duration: root.animated ? 120ms : 0ms; easing: ease-out; }
         }
     }
-    RelayRing {
-        x: (root.width - self.width) / 2; y: (root.height - self.height) / 2;
-        width: 58px * (0.90 + 0.10 * clamp(root.reveal-progress, 0, 1)); height: self.width;
-        services: root.services; turn: 1 - root.rim-progress;
-        strength: root.external-rings ? 0 : 4 * root.rim-progress * (1 - root.rim-progress);
-        render-trail(start, span) => { return root.render-trail(start, span); }
+    for service[index] in root.services: Rectangle {
+        width: root.width; height: root.height; background: transparent;
+        opacity: root.external-rings ? 0 : clamp(root.reveal-progress * 1.8, 0, 1);
+        Path {
+            width: parent.width; height: parent.height; fit: preserve;
+            commands: root.render-rim(index, root.services.length, root.rim-turn, false, root.width / 2px, root.height / 2px);
+            stroke: service.accent; stroke-width: 2.8px; stroke-line-cap: round; fill: transparent;
+        }
+        Path {
+            width: parent.width; height: parent.height; fit: preserve;
+            commands: root.render-rim(index, root.services.length, root.rim-turn, true, root.width / 2px, root.height / 2px);
+            stroke: service.accent.brighter(35%); stroke-width: 3.4px;
+            stroke-line-cap: round; fill: transparent; opacity: root.spin-highlight;
+        }
     }
     touch := TouchArea {
         enabled: root.revealed && root.reveal-progress > 0.25;

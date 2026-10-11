@@ -286,6 +286,8 @@ impl EntryMotion {
         capsule.set_revealed(open);
         mini.set_flow_active(false);
         mini.set_external_rings(false);
+        mini.set_rim_turn(0.0);
+        mini.set_spin_highlight(0.0);
         capsule.set_flow_controlled(false);
         capsule.set_external_rings(false);
         capsule.set_flow_strokes(ModelRc::default());
@@ -309,6 +311,27 @@ impl EntryMotion {
     fn frame(&self, mini: &MiniWindow, capsule: &CapsuleWindow, progress: f64) {
         self.progress.set(progress);
         let geometry = self.geometry.borrow().expect("Active flow geometry");
+        if progress <= 0.0 {
+            mini.set_flow_reveal(1.0);
+            mini.set_external_rings(false);
+            mini.set_rim_turn(flow::spin_turn(-progress) as f32);
+            mini.set_spin_highlight(
+                (std::f64::consts::PI * (-progress).clamp(0.0, 1.0)).sin() as f32 * 0.65,
+            );
+            capsule.set_flow_progress(0.0);
+            capsule.set_flow_reveal(0.0);
+            capsule.set_flow_visibility(0.0);
+            capsule.set_flow_strokes(ModelRc::default());
+            self.layer.set_strokes(ModelRc::default());
+            let _ = self.layer.hide();
+            if !capsule.get_revealed() {
+                let _ = capsule.hide();
+            }
+            return;
+        }
+        mini.set_external_rings(true);
+        mini.set_rim_turn(0.0);
+        mini.set_spin_highlight(0.0);
         let rail = geometry.rail(progress);
         mini.set_flow_reveal(geometry.mini_reveal(progress) as f32);
         capsule.set_flow_progress(rail as f32);
@@ -457,11 +480,16 @@ impl EntryMotion {
         mini.set_revealed(!open);
         capsule.set_revealed(open);
         self.frame(mini, capsule, from);
-        let base = flow::base_ms(geometry.spatial(), open);
-        let to = if open { 1.0 } else { 0.0 };
-        let from_time = flow::time_position(geometry.spatial(), from);
-        let to_time = flow::time_position(geometry.spatial(), to);
-        let duration = Duration::from_secs_f64(base as f64 / 1000.0 * (to_time - from_time).abs());
+        let to = if open {
+            1.0
+        } else if capsule.get_services().row_count() == 0 {
+            0.0
+        } else {
+            -1.0
+        };
+        let from_time = flow::motion_time_ms(geometry.spatial(), open, from);
+        let to_time = flow::motion_time_ms(geometry.spatial(), open, to);
+        let duration = Duration::from_secs_f64((to_time - from_time).abs() / 1000.0);
         fn step(
             motion: EntryMotion,
             mini: slint::Weak<MiniWindow>,
@@ -484,12 +512,15 @@ impl EntryMotion {
                 (start.elapsed().as_secs_f64() / duration.as_secs_f64()).min(1.0)
             };
             let spatial = motion.geometry.borrow().unwrap().spatial();
-            let from_time = flow::time_position(spatial, from);
-            let to_time = flow::time_position(spatial, to);
+            let open = to == 1.0;
+            let from_time = flow::motion_time_ms(spatial, open, from);
+            let to_time = flow::motion_time_ms(spatial, open, to);
             let progress = if t >= 1.0 {
                 to
+            } else if t == 0.0 {
+                from
             } else {
-                flow::progress_at(spatial, from_time + (to_time - from_time) * t)
+                flow::motion_progress(spatial, open, from_time + (to_time - from_time) * t)
             };
             motion.frame(&m, &c, progress);
             if t >= 1.0 {
@@ -1291,7 +1322,7 @@ fn qa_handoff_scene(
     }
     scenes
         .borrow_mut()
-        .push(serde_json::json!({"time":start.elapsed().as_millis(),"progress":motion.progress.get(),"active":motion.active.get(),"windows":windows}));
+        .push(serde_json::json!({"time":start.elapsed().as_millis(),"progress":motion.progress.get(),"active":motion.active.get(),"mini_turn":mini.get_rim_turn(),"mini_ids":(0..mini.get_services().row_count()).map(|i| mini.get_services().row_data(i).unwrap().source_index).collect::<Vec<_>>(),"windows":windows}));
 }
 
 #[cfg(debug_assertions)]
@@ -1854,6 +1885,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     capsule.on_render_trail(arc_trail);
     let mini = MiniWindow::new()?;
     mini.on_render_trail(arc_trail);
+    mini.on_render_rim(|index, count, turn, tip, x, y| {
+        flow::mini_path(
+            count.max(0) as usize,
+            index.max(0) as usize,
+            turn as f64,
+            tip,
+            flow::Vector {
+                x: x as f64,
+                y: y as f64,
+            },
+        )
+        .into()
+    });
     mini.set_animated(initial.animations_enabled);
     let menu = EntryMenuWindow::new()?;
     let settings = SettingsWindow::new()?;

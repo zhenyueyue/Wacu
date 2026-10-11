@@ -47,3 +47,32 @@ for count in args.counts:
         assert mean <= 4 and maximum <= 32, (
             f'Quota {count}/{row} jumps at rest: mean={mean:.2f}, max={maximum}')
         print(f'{count} rings / row {row}: native terminal match, mean={mean:.2f}, max={maximum}')
+
+    mini_rest = next(s for s in scenes[resting_index + 1:]
+                     if not s['active'] and s['progress'] == 0)
+    spin = [s for s in scenes if s['active'] and s['progress'] < 0]
+    assert spin and spin[-1]['mini_turn'] > .995, 'Mini must finish a complete turn'
+    assert all(a['mini_turn'] <= b['mini_turn'] for a, b in zip(spin, spin[1:]))
+    accents = [(34, 197, 94), (255, 138, 76), (139, 92, 246)]
+    probes = [mini_rest] + [min(spin, key=lambda s: abs(s['mini_turn'] - turn))
+                            for turn in [.25, .5, .75]]
+    for scene in probes:
+        window = next(w for w in scene['windows'] if w['name'].endswith('mini'))
+        frame = Image.open(directory / (window['name'] + '.png')).convert('RGB')
+        scale = frame.width / 66
+        for row, service_id in enumerate(scene['mini_ids']):
+            for fraction in [.25, .5, .75]:
+                angle = -math.pi / 2 + (row + fraction) * 2 * math.pi / count
+                angle += scene['mini_turn'] * 2 * math.pi
+                x = math.floor(frame.width / 2 + 29 * scale * math.cos(angle))
+                y = math.floor(frame.height / 2 + 29 * scale * math.sin(angle))
+                pixels = [frame.getpixel((px, py))
+                          for py in range(max(0, y - 1), min(frame.height, y + 2))
+                          for px in range(max(0, x - 1), min(frame.width, x + 2))]
+                color = min(pixels, key=lambda c: sum((a - b) ** 2
+                                                     for a, b in zip(c, accents[service_id])))
+                matched = min(range(3), key=lambda i: sum((a - b) ** 2
+                                                         for a, b in zip(color, accents[i])))
+                assert max(color) - min(color) > 35 and matched == service_id, (
+                    f'Mini sector {row} has wrong color at turn {scene["mini_turn"]:.3f}')
+    print(f'{count} Mini sectors: equal allocation and native rotating colors verified')

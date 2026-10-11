@@ -2,9 +2,40 @@
 use std::f64::consts::PI;
 
 pub const OPEN_MS: u64 = 1080;
-pub const CLOSE_MS: u64 = 930;
+pub const CLOSE_MS: u64 = 480;
 pub const LOCAL_OPEN_MS: u64 = 630;
-pub const LOCAL_CLOSE_MS: u64 = 480;
+pub const LOCAL_CLOSE_MS: u64 = 200;
+pub const MINI_SPIN_MS: u64 = 420;
+
+pub fn spin_turn(progress: f64) -> f64 {
+    let s = progress.clamp(0.0, 1.0);
+    s.powi(3) * (10.0 - 15.0 * s + 6.0 * s * s)
+}
+
+fn mini_sector(count: usize, index: usize) -> (f64, f64) {
+    let sector = PI * 2.0 / count.max(1) as f64;
+    let seam = 0.10;
+    (
+        -PI / 2.0 + index as f64 * sector + seam / 2.0,
+        sector - seam,
+    )
+}
+
+pub fn mini_path(count: usize, index: usize, turn: f64, tip: bool, center: Vector) -> String {
+    if count == 0 {
+        return String::new();
+    }
+    let (start, span) = mini_sector(count, index);
+    let start = start + turn * PI * 2.0;
+    let span = if tip { span.min(0.24) } else { span };
+    let point = |angle: f64| (center.x + 29.0 * angle.cos(), center.y + 29.0 * angle.sin());
+    let (x, y) = point(start);
+    let (ex, ey) = point(start + span);
+    format!(
+        "M {x:.6} {y:.6} A 29 29 0 {} 1 {ex:.6} {ey:.6}",
+        if span > PI { 1 } else { 0 }
+    )
+}
 
 // Keep the established desktop travel rate. Only the assembly after all
 // three lines have reached the Logo gets 65% more time, with a smooth ramp.
@@ -44,9 +75,27 @@ pub fn base_ms(spatial: bool, open: bool) -> u64 {
     }
 }
 
+pub fn motion_time_ms(spatial: bool, open: bool, progress: f64) -> f64 {
+    if progress < 0.0 {
+        progress * MINI_SPIN_MS as f64
+    } else {
+        time_position(spatial, progress) * base_ms(spatial, open) as f64
+    }
+}
+
+pub fn motion_progress(spatial: bool, open: bool, time_ms: f64) -> f64 {
+    if time_ms < 0.0 {
+        (time_ms / MINI_SPIN_MS as f64).max(-1.0)
+    } else {
+        progress_at(spatial, time_ms / base_ms(spatial, open) as f64)
+    }
+}
+
 #[cfg(debug_assertions)]
 pub fn duration_ms(spatial: bool, open: bool) -> u64 {
-    (base_ms(spatial, open) as f64 * time_position(spatial, 1.0)).ceil() as u64
+    (motion_time_ms(spatial, open, 1.0)
+        - motion_time_ms(spatial, open, if open { 0.0 } else { -1.0 }))
+    .ceil() as u64
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -131,12 +180,9 @@ impl Geometry {
         }
     }
 
-    pub fn opacity(self, index: usize, progress: f64) -> f32 {
-        if !self.spatial() {
-            return (progress / 0.05).clamp(0.0, 1.0) as f32;
-        }
-        let q = ((progress * 720.0 - index as f64 * 18.0) / 330.0).clamp(0.0, 1.0);
-        (q * 18.0).min(1.0) as f32
+    pub fn opacity(self, _index: usize, _progress: f64) -> f32 {
+        // Mini's permanent sectors must stay opaque throughout the handoff.
+        1.0
     }
 
     pub fn coil(self, count: usize, index: usize, progress: f64) -> f64 {
@@ -145,7 +191,10 @@ impl Geometry {
     }
 
     pub fn width(self, count: usize, index: usize, progress: f64) -> f64 {
-        let initial = 2.8 * self.source_scale.max(self.target_scale);
+        let initial = 2.8
+            * (self.source_scale
+                + (self.source_scale.max(self.target_scale) - self.source_scale)
+                    * smooth(progress / 0.12));
         initial + (self.quota_width - initial) * self.coil(count, index, progress)
     }
 
@@ -286,6 +335,7 @@ impl Geometry {
         let count = count.max(1);
         let start = -PI / 2.0 + index as f64 * PI * 2.0 / count as f64;
         let span = PI * 1.6 / count as f64;
+        let (mini_start, mini_span) = mini_sector(count, index);
         let middle = start + span / 2.0;
         let target_radius = 29.0 * self.target_scale;
         let end = Vector {
@@ -340,9 +390,10 @@ impl Geometry {
                 let angle = start + span * s;
                 let ribbon = |t| cubic(route, t + (s - 0.5) * portion);
                 if q < 0.20 {
+                    let source_angle = mini_start + mini_span * s;
                     let from = Vector {
-                        x: self.source.x + 29.0 * self.source_scale * angle.cos(),
-                        y: self.source.y + 29.0 * self.source_scale * angle.sin(),
+                        x: self.source.x + 29.0 * self.source_scale * source_angle.cos(),
+                        y: self.source.y + 29.0 * self.source_scale * source_angle.sin(),
                     };
                     interpolate(from, ribbon(0.0), smooth(q / 0.20))
                 } else if q < 0.80 {
@@ -362,6 +413,44 @@ impl Geometry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mini_sectors_divide_the_perimeter_equally() {
+        let g = fixture();
+        for count in 1..=3 {
+            for i in 0..count {
+                let (start, span) = mini_sector(count, i);
+                assert!((span + 0.10 - PI * 2.0 / count as f64).abs() < 1e-10);
+                for (j, p) in g.phase_points(count, i, 0.0).iter().enumerate() {
+                    let angle = start + span * j as f64 / 64.0;
+                    assert!((p.x - g.source.x - 29.0 * g.source_scale * angle.cos()).abs() < 1e-8);
+                    assert!((p.y - g.source.y - 29.0 * g.source_scale * angle.sin()).abs() < 1e-8);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn return_finishes_one_turn_and_remains_reversible() {
+        assert_eq!(spin_turn(0.0), 0.0);
+        assert_eq!(spin_turn(1.0), 1.0);
+        assert!(1.0 - spin_turn(0.999) < 1e-7);
+        assert_eq!(duration_ms(true, true), 1389);
+        assert!(duration_ms(true, false) < 1196);
+        assert!(duration_ms(false, false) < 749);
+        for spatial in [true, false] {
+            for open in [true, false] {
+                for step in -100..=100 {
+                    let p = step as f64 / 100.0;
+                    assert!(
+                        (motion_progress(spatial, open, motion_time_ms(spatial, open, p)) - p)
+                            .abs()
+                            < 1e-10
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn desktop_travel_keeps_its_rate_while_assembly_slows() {
         for step in 0..=52 {
