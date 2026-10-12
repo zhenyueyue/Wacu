@@ -605,13 +605,16 @@ impl EntryMotion {
         let strokes = (0..services.row_count())
             .filter_map(|index| {
                 let coil = geometry.coil(services.row_count(), index, progress);
-                let strength = geometry.opacity(index, progress)
-                    * if inside {
-                        1.0
-                    } else {
-                        (1.0 + (capsule.get_surface_opacity() as f64 - 1.0)
-                            * flow::smooth(progress / arrival)) as f32
-                    };
+                let strength = geometry.opacity(
+                    index,
+                    progress,
+                    services.row_data(index).unwrap().percent as f64,
+                ) * if inside {
+                    1.0
+                } else {
+                    (1.0 + (capsule.get_surface_opacity() as f64 - 1.0)
+                        * flow::smooth(progress / arrival)) as f32
+                };
                 if strength <= 0.001 {
                     return None;
                 }
@@ -1574,7 +1577,7 @@ fn qa_handoff_scene(
     }
     scenes
         .borrow_mut()
-        .push(serde_json::json!({"time":start.elapsed().as_millis(),"progress":motion.progress.get(),"active":motion.active.get(),"mini_turn":mini.get_rim_turn(),"mini_ids":(0..mini.get_services().row_count()).map(|i| mini.get_services().row_data(i).unwrap().source_index).collect::<Vec<_>>(),"windows":windows}));
+        .push(serde_json::json!({"time":start.elapsed().as_millis(),"progress":motion.progress.get(),"active":motion.active.get(),"mini_turn":mini.get_rim_turn(),"mini_ids":(0..mini.get_services().row_count()).map(|i| mini.get_services().row_data(i).unwrap().source_index).collect::<Vec<_>>(),"mini_percent":(0..mini.get_services().row_count()).map(|i| mini.get_services().row_data(i).unwrap().percent).collect::<Vec<_>>(),"windows":windows}));
 }
 
 #[cfg(debug_assertions)]
@@ -1996,8 +1999,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "seven_day":{"utilization":33,"resets_at":"2026-10-18T12:00:00+08:00"},
                     "seven_day_sonnet":{"utilization":20,"resets_at":"2026-10-18T12:00:00+08:00"}
                 })),
-                "unused" | "exhausted" => claude::parse_snapshot(serde_json::json!({
-                    "five_hour":{"utilization":if fixture == "unused" { 0 } else { 100 }}
+                "unused" | "half" | "exhausted" => claude::parse_snapshot(serde_json::json!({
+                    "five_hour":{"utilization":match fixture.as_str() { "unused" => 0, "half" => 50, _ => 100 }}
                 })),
                 _ => return Err("Unknown Claude QA fixture".into()),
             };
@@ -2133,7 +2136,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         "capsule" | "quick" | "detail" | "settings"
     ) || (qa_view == "mini"
         && (std::env::var_os("WACU_QA_ENTRY_MOTION").is_some()
-            || std::env::var_os("WACU_QA_ENTRY_HANDOFF").is_some()))
+            || std::env::var_os("WACU_QA_ENTRY_HANDOFF").is_some()
+            || std::env::var_os("WACU_QA_CLAUDE_FIXTURE").is_some()))
     {
         initial = Preferences {
             mode: Mode::Pinned,
@@ -2170,10 +2174,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     capsule.on_render_trail(arc_trail);
     let mini = MiniWindow::new()?;
     mini.on_render_trail(arc_trail);
-    mini.on_render_rim(|index, count, turn, tip, x, y| {
+    mini.on_render_rim(|index, count, percent, turn, tip, x, y| {
         flow::mini_path(
             count.max(0) as usize,
             index.max(0) as usize,
+            percent as f64,
             turn as f64,
             tip,
             flow::Vector {
@@ -3663,6 +3668,20 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .find(|item| item.source_index == 1)
                     .unwrap();
                 assert_eq!(actual.percent_text, expected.percent_text);
+                let mini = m.upgrade().unwrap();
+                let mini_actual = (0..mini.get_services().row_count())
+                    .filter_map(|i| mini.get_services().row_data(i))
+                    .find(|item| item.source_index == 1)
+                    .unwrap();
+                assert_eq!(mini_actual.percent, expected.percent);
+                if mode == "mini" {
+                    let count = std::env::var("WACU_QA_COUNT")
+                        .ok()
+                        .and_then(|value| value.parse::<usize>().ok())
+                        .unwrap_or(3)
+                        .min(3);
+                    assert_eq!(mini.get_services().row_count(), count);
+                }
                 if let Ok(fixture) = std::env::var("WACU_QA_CLAUDE_FIXTURE") {
                     if fixture == "unused" || fixture == "exhausted" {
                         let remaining = if fixture == "unused" { 100.0 } else { 0.0 };

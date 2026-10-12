@@ -278,7 +278,7 @@ export component MiniWindow inherits Window {
     in property <float> flow-reveal: 0;
     in property <float> rim-turn: 0;
     in property <float> spin-highlight: 0;
-    pure callback render-rim(int, int, float, bool, float, float) -> string;
+    pure callback render-rim(int, int, float, float, bool, float, float) -> string;
     pure callback render-trail(float, float) -> string;
     in-out property <bool> revealed: false;
     out property <float> reveal-progress: root.flow-active ? root.flow-reveal : (root.revealed ? 1 : 0);
@@ -321,17 +321,24 @@ export component MiniWindow inherits Window {
     }
     for service[index] in root.services: Rectangle {
         width: root.width; height: root.height; background: transparent;
-        opacity: root.external-rings ? 0 : clamp(root.reveal-progress * 1.8, 0, 1);
+        opacity: clamp(root.reveal-progress * 1.8, 0, 1);
         Path {
             width: parent.width; height: parent.height; fit: preserve;
-            commands: root.render-rim(index, root.services.length, root.rim-turn, false, root.width / 2px, root.height / 2px);
-            stroke: service.accent; stroke-width: 2.8px; stroke-line-cap: round; fill: transparent;
+            commands: root.render-rim(index, root.services.length, 100, root.rim-turn, false, root.width / 2px, root.height / 2px);
+            stroke: service.percent-text == "--" ? #2c3036 : #3b3e43;
+            stroke-width: 2.8px; stroke-line-cap: round; fill: transparent;
         }
         Path {
             width: parent.width; height: parent.height; fit: preserve;
-            commands: root.render-rim(index, root.services.length, root.rim-turn, true, root.width / 2px, root.height / 2px);
+            commands: root.render-rim(index, root.services.length, service.percent, root.rim-turn, false, root.width / 2px, root.height / 2px);
+            stroke: service.accent; stroke-width: 2.8px; stroke-line-cap: round; fill: transparent;
+            opacity: root.external-rings ? 0 : 1;
+        }
+        Path {
+            width: parent.width; height: parent.height; fit: preserve;
+            commands: root.render-rim(index, root.services.length, service.percent, root.rim-turn, true, root.width / 2px, root.height / 2px);
             stroke: service.accent.brighter(35%); stroke-width: 3.4px;
-            stroke-line-cap: round; fill: transparent; opacity: root.spin-highlight;
+            stroke-line-cap: round; fill: transparent; opacity: root.external-rings ? 0 : root.spin-highlight;
         }
     }
     touch := TouchArea {

@@ -1,4 +1,4 @@
-param([switch]$Archive, [int[]]$Counts = @(0, 1, 2, 3), [int[]]$Directions = @(0, 1, 2))
+param([switch]$Archive, [int[]]$Counts = @(0, 1, 2, 3), [int[]]$Directions = @(0, 1, 2), [ValidateSet('', 'half', 'unused', 'exhausted')][string]$ClaudeFixture = '')
 $ErrorActionPreference = 'Stop'
 $taskRoot = Split-Path -Parent $PSScriptRoot
 $configPath = Join-Path $env:APPDATA 'Wacu\preferences.json'
@@ -15,6 +15,7 @@ foreach ($count in $Counts) {
         $start.Environment['WACU_QA_COUNT'] = [string]$count
         $start.Environment['WACU_QA_SIZE'] = '1'
         $start.Environment['WACU_QA_EXIT'] = '1'
+        if ($ClaudeFixture) { $start.Environment['WACU_QA_CLAUDE_FIXTURE'] = $ClaudeFixture }
         $start.Environment['APPDATA'] = Join-Path $taskRoot "target\qa-handoff-profile-$count-$direction"
         $process = [System.Diagnostics.Process]::Start($start)
         $errors = $process.StandardError.ReadToEndAsync()

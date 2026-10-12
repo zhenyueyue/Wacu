@@ -7,6 +7,11 @@ $config = Join-Path $env:APPDATA 'Wacu\preferences.json'
 $before = if (Test-Path -LiteralPath $config) { (Get-FileHash -LiteralPath $config).Hash } else { $null }
 $cases = @('capsule', 'quick', 'detail', 'settings') | ForEach-Object { @{ Name = $_; View = $_; Fixture = 'ok' } }
 if (!$Live) {
+    foreach ($fixture in @('unused', 'half', 'exhausted')) {
+        foreach ($count in 1..3) {
+            $cases += @{ Name = "$fixture-mini-$count"; View = 'mini'; Fixture = $fixture; Count = $count }
+        }
+    }
     foreach ($fixture in @('unused', 'exhausted')) {
         foreach ($view in @('capsule', 'quick', 'detail')) {
             $cases += @{ Name = "$fixture-$view"; View = $view; Fixture = $fixture }
@@ -26,6 +31,7 @@ foreach ($case in $cases) {
     $start.RedirectStandardError = $true
     $start.Environment['APPDATA'] = Join-Path $root 'target\qa-claude-profile'
     $start.Environment['WACU_QA_VIEW'] = $case.View
+    if ($case.ContainsKey('Count')) { $start.Environment['WACU_QA_COUNT'] = [string]$case.Count }
     $start.Environment['WACU_QA_SERVICE'] = '1'
     $start.Environment['WACU_QA_PAGE'] = '1'
     $start.Environment['WACU_QA_EXIT'] = '1'

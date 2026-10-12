@@ -14,22 +14,44 @@ pub fn spin_turn(progress: f64) -> f64 {
 
 fn mini_sector(count: usize, index: usize) -> (f64, f64) {
     let sector = PI * 2.0 / count.max(1) as f64;
-    let seam = 0.10;
+    let seam = if count == 1 { 0.0 } else { 0.10 };
     (
         -PI / 2.0 + index as f64 * sector + seam / 2.0,
         sector - seam,
     )
 }
 
-pub fn mini_path(count: usize, index: usize, turn: f64, tip: bool, center: Vector) -> String {
-    if count == 0 {
+fn quota_fraction(percent: f64) -> f64 {
+    if percent.is_finite() {
+        percent.clamp(0.0, 100.0) / 100.0
+    } else {
+        0.0
+    }
+}
+
+pub fn mini_path(
+    count: usize,
+    index: usize,
+    percent: f64,
+    turn: f64,
+    tip: bool,
+    center: Vector,
+) -> String {
+    if count == 0 || quota_fraction(percent) == 0.0 {
         return String::new();
     }
     let (start, span) = mini_sector(count, index);
     let start = start + turn * PI * 2.0;
+    let span = span * quota_fraction(percent);
     let span = if tip { span.min(0.24) } else { span };
     let point = |angle: f64| (center.x + 29.0 * angle.cos(), center.y + 29.0 * angle.sin());
     let (x, y) = point(start);
+    if span >= PI * 2.0 {
+        let (mx, my) = point(start + PI);
+        return format!(
+            "M {x:.6} {y:.6} A 29 29 0 1 1 {mx:.6} {my:.6} A 29 29 0 1 1 {x:.6} {y:.6} Z"
+        );
+    }
     let (ex, ey) = point(start + span);
     format!(
         "M {x:.6} {y:.6} A 29 29 0 {} 1 {ex:.6} {ey:.6}",
@@ -180,9 +202,17 @@ impl Geometry {
         }
     }
 
-    pub fn opacity(self, _index: usize, _progress: f64) -> f32 {
-        // Mini's permanent sectors must stay opaque throughout the handoff.
-        1.0
+    pub fn opacity(self, index: usize, progress: f64, percent: f64) -> f32 {
+        if quota_fraction(percent) > 0.0 {
+            return 1.0;
+        }
+        // Empty/unknown Mini sectors have no colored endpoint. Grow their
+        // transfer line smoothly before travel, rather than flashing a dot.
+        smooth(if self.spatial() {
+            (progress * 720.0 - index as f64 * 18.0) / 33.0
+        } else {
+            progress / 0.025
+        }) as f32
     }
 
     pub fn coil(self, count: usize, index: usize, progress: f64) -> f64 {
@@ -232,11 +262,11 @@ impl Geometry {
     pub fn points(self, count: usize, index: usize, progress: f64, percent: f64) -> Vec<Vector> {
         let q = ((progress * 720.0 - index as f64 * 18.0) / 330.0).clamp(0.0, 1.0);
         if self.spatial() && q < 1.0 {
-            return self.phase_points(count, index, q);
+            return self.phase_points(count, index, q, percent);
         }
-        let logo_arc = self.phase_points(count, index, 1.0);
+        let logo_arc = self.phase_points(count, index, 1.0, percent);
         if !self.spatial() && progress < 0.10 {
-            let source_arc = self.phase_points(count, index, 0.0);
+            let source_arc = self.phase_points(count, index, 0.0, percent);
             return source_arc
                 .into_iter()
                 .zip(logo_arc)
@@ -331,11 +361,12 @@ impl Geometry {
             .collect()
     }
 
-    fn phase_points(self, count: usize, index: usize, q: f64) -> Vec<Vector> {
+    fn phase_points(self, count: usize, index: usize, q: f64, percent: f64) -> Vec<Vector> {
         let count = count.max(1);
         let start = -PI / 2.0 + index as f64 * PI * 2.0 / count as f64;
         let span = PI * 1.6 / count as f64;
         let (mini_start, mini_span) = mini_sector(count, index);
+        let mini_span = mini_span * quota_fraction(percent);
         let middle = start + span / 2.0;
         let target_radius = 29.0 * self.target_scale;
         let end = Vector {
@@ -419,11 +450,52 @@ mod tests {
         for count in 1..=3 {
             for i in 0..count {
                 let (start, span) = mini_sector(count, i);
-                assert!((span + 0.10 - PI * 2.0 / count as f64).abs() < 1e-10);
-                for (j, p) in g.phase_points(count, i, 0.0).iter().enumerate() {
+                let seam = if count == 1 { 0.0 } else { 0.10 };
+                assert!((span + seam - PI * 2.0 / count as f64).abs() < 1e-10);
+                for (j, p) in g.phase_points(count, i, 0.0, 100.0).iter().enumerate() {
                     let angle = start + span * j as f64 / 64.0;
                     assert!((p.x - g.source.x - 29.0 * g.source_scale * angle.cos()).abs() < 1e-8);
                     assert!((p.y - g.source.y - 29.0 * g.source_scale * angle.sin()).abs() < 1e-8);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mini_rim_encodes_quota_and_handoff_starts_at_the_same_arc() {
+        let center = Vector { x: 33.0, y: 33.0 };
+        assert!(mini_path(1, 0, 100.0, 0.0, false, center).ends_with('Z'));
+        assert!(mini_path(1, 0, 50.0, 0.0, false, center).ends_with("33.000000 62.000000"));
+        assert!(mini_path(1, 0, 25.0, 0.0, false, center).ends_with("62.000000 33.000000"));
+        for percent in [0.0, -1.0, f64::NAN] {
+            assert!(mini_path(1, 0, percent, 0.0, false, center).is_empty());
+            assert!(mini_path(1, 0, percent, 0.5, true, center).is_empty());
+        }
+        for count in 1..=3 {
+            for index in 0..count {
+                for percent in [0.0, 25.0, 50.0, 100.0] {
+                    let (start, span) = mini_sector(count, index);
+                    for g in [
+                        fixture(),
+                        Geometry {
+                            logo: fixture().source,
+                            ..fixture()
+                        },
+                    ] {
+                        for (j, p) in g.points(count, index, 0.0, percent).iter().enumerate() {
+                            let angle = start + span * percent / 100.0 * j as f64 / 64.0;
+                            assert!(
+                                (p.x - g.source.x - 29.0 * g.source_scale * angle.cos()).abs()
+                                    < 1e-8
+                            );
+                            assert!(
+                                (p.y - g.source.y - 29.0 * g.source_scale * angle.sin()).abs()
+                                    < 1e-8
+                            );
+                        }
+                        assert_eq!(g.opacity(index, 0.0, 0.0), 0.0);
+                        assert_eq!(g.opacity(index, 0.20, 0.0), 1.0);
+                    }
                 }
             }
         }
@@ -492,7 +564,7 @@ mod tests {
         let g = fixture();
         for count in 1..=3 {
             for i in 0..count {
-                for p in g.phase_points(count, i, 1.0) {
+                for p in g.phase_points(count, i, 1.0, 100.0) {
                     assert!(
                         ((p.x - g.logo.x).hypot(p.y - g.logo.y) - 29.0 * g.target_scale).abs()
                             < 0.001
@@ -504,7 +576,9 @@ mod tests {
     #[test]
     fn independent_routes_separate_in_middle() {
         let g = fixture();
-        let centers: Vec<_> = (0..3).map(|i| g.phase_points(3, i, 0.5)[32]).collect();
+        let centers: Vec<_> = (0..3)
+            .map(|i| g.phase_points(3, i, 0.5, 100.0)[32])
+            .collect();
         for pair in centers.windows(2) {
             assert!((pair[0].x - pair[1].x).hypot(pair[0].y - pair[1].y) > 40.0);
         }
@@ -543,8 +617,8 @@ mod tests {
         let g = fixture();
         for boundary in [0.20, 0.80] {
             for i in 0..3 {
-                let before = g.phase_points(3, i, boundary - 0.00001);
-                let after = g.phase_points(3, i, boundary + 0.00001);
+                let before = g.phase_points(3, i, boundary - 0.00001, 100.0);
+                let after = g.phase_points(3, i, boundary + 0.00001, 100.0);
                 for (a, b) in before.into_iter().zip(after) {
                     assert!((a.x - b.x).hypot(a.y - b.y) < 0.1);
                 }
@@ -558,7 +632,8 @@ mod tests {
             for i in 0..count {
                 for step in 12..=100 {
                     let p = step as f64 / 100.0;
-                    assert_eq!(fixture().opacity(i, p), 1.0);
+                    assert_eq!(fixture().opacity(i, p, 24.0), 1.0);
+                    assert_eq!(fixture().opacity(i, p, 0.0), 1.0);
                     assert_eq!(fixture().points(count, i, p, 24.0).len(), 65);
                 }
             }

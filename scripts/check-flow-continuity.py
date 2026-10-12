@@ -15,8 +15,12 @@ for count in args.counts:
     scenes = json.loads((directory / 'scenes.json').read_text(encoding='utf-8'))
     resting_index = next(i for i, s in enumerate(scenes)
                          if not s['active'] and s['progress'] == 1)
+    # All arcs already use their exact static SVG once rail >= .80 plus
+    # the last row's stagger. A one-service capture can skip the later .95
+    # frame on a busy desktop without skipping the terminal arc itself.
+    terminal_progress = (290 + 420 * (.80 + (.12 if count > 1 else 0))) / 720
     terminal = next(s for s in reversed(scenes[:resting_index])
-                    if s['active'] and s['progress'] >= .95)
+                    if s['active'] and s['progress'] >= terminal_progress)
 
     def capsule(scene):
         window = next(w for w in scene['windows'] if w['name'].endswith('capsule'))
@@ -29,6 +33,8 @@ for count in args.counts:
     scale = resting.width / 96
     radius = (56 - 4 - 4.5) * 24 / 56 * scale
     for row in range(count):
+        if scenes[resting_index]['mini_percent'][row] <= 0:
+            continue
         cx, cy = 48 * scale, (118 + row * 77) * scale
         differences = []
         for y in range(max(0, int(cy - radius - 5 * scale)),
@@ -61,18 +67,30 @@ for count in args.counts:
         frame = Image.open(directory / (window['name'] + '.png')).convert('RGB')
         scale = frame.width / 66
         for row, service_id in enumerate(scene['mini_ids']):
-            for fraction in [.25, .5, .75]:
-                angle = -math.pi / 2 + (row + fraction) * 2 * math.pi / count
+            fill = scene['mini_percent'][row] / 100
+            sector = 2 * math.pi / count
+            seam = 0 if count == 1 else .10
+            samples = [(fill * f, True) for f in [.25, .5, .75]] if fill > 0 else []
+            # Tiny gaps are covered by rounded caps and antialiasing; only
+            # probe empty spans that have room for a native 3x3 pixel sample.
+            if (1 - fill) * (sector - seam) * 29 * scale > 8:
+                samples += [(fill + (1 - fill) * f, False) for f in [.25, .5, .75]]
+            for fraction, filled in samples:
+                angle = -math.pi / 2 + row * sector + seam / 2 + fraction * (sector - seam)
                 angle += scene['mini_turn'] * 2 * math.pi
                 x = math.floor(frame.width / 2 + 29 * scale * math.cos(angle))
                 y = math.floor(frame.height / 2 + 29 * scale * math.sin(angle))
                 pixels = [frame.getpixel((px, py))
                           for py in range(max(0, y - 1), min(frame.height, y + 2))
                           for px in range(max(0, x - 1), min(frame.width, x + 2))]
+                if not filled:
+                    assert all(max(c) - min(c) <= 35 for c in pixels), (
+                        f'Mini sector {row} paints quota into the empty track at {fraction:.3f}')
+                    continue
                 color = min(pixels, key=lambda c: sum((a - b) ** 2
                                                      for a, b in zip(c, accents[service_id])))
                 matched = min(range(3), key=lambda i: sum((a - b) ** 2
                                                          for a, b in zip(color, accents[i])))
                 assert max(color) - min(color) > 35 and matched == service_id, (
                     f'Mini sector {row} has wrong color at turn {scene["mini_turn"]:.3f}')
-    print(f'{count} Mini sectors: equal allocation and native rotating colors verified')
+    print(f'{count} Mini sectors: remaining quota and native rotating colors verified')
