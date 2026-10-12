@@ -169,7 +169,7 @@ impl UsageState {
                     .with_timezone(&Local);
                 format!("真实额度 · 更新于 {}", time.format("%H:%M"))
             })
-            .unwrap_or_else(|| "正在读取 Claude 额度…".into())
+            .unwrap_or_else(|| "等待 Claude 工作或手动刷新额度".into())
     }
 }
 
@@ -322,6 +322,7 @@ impl Engine {
             .args(args)
             .current_dir(base)
             .env("CLAUDE_CODE_ENTRYPOINT", "wacu")
+            .env("WACU_QUOTA_READER", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());

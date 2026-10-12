@@ -79,7 +79,11 @@ Debug 原生界面 QA 默认禁用网络采集；`scripts/check-codex.ps1` 显�
 
 解析 5 小时、每周及模型专属窗口，保留空值为未知，`utilization`/`percent` 均为 0–100。`limits[]` 的模型周额度只接受 weekly 组且没有 surface 限制的项目，并覆盖对应旧模型窗口。主环只选择共享 5 小时/每周窗口。额外用量仅显示比例，不推定金额单位。
 
-后台独立工作线程正常每 300 秒刷新；失败退避至 1800 秒，限流至少冷却 900 秒，手动刷新不绕过冷却。40 秒总超时覆盖账户核对与查询，结束后回收子进程，Wacu 退出由共享 Windows Job Object 保证清理。UI 默认未知，不以旧演示百分比填补查询失败。
+后台独立工作线程仅在本机 Code 会话工作时按 300 秒间隔刷新；空闲或等待输入／授权时暂停。失败退避至 1800 秒，限流至少冷却 900 秒；手动刷新有 60 秒冷却，也不绕过限流。40 秒总超时覆盖账户核对与查询，结束后回收子进程，Wacu 退出由共享 Windows Job Object 保证清理。UI 默认未知，不以旧演示百分比填补查询失败。
+
+`claude_activity.rs` 接收官方生命周期 hook 的最少字段，用匿名哈希区分会话／子任务，保存工作状态与原生父进程 PID、创建时间。锁文件串行化同会话并发事件，临时文件原子替换；不保存提示词、工具参数、返回内容或账号。监测线程每两秒聚合活动会话，并验证进程仍存活且创建时间相同，避免退出后残留状态及 PID 重用。Desktop 与 CLI 的状态共同决定是否刷新，但额度仍来自经核对的 CLI 账号。
+
+`claude_schedule.rs` 统一限制自动间隔、手动冷却及错误退避，恢复工作不重置间隔。额度子进程继承 `WACU_QUOTA_READER`，同时保留禁用 hooks 的设置；自身读取不会反过来激活状态检测。连接工具以备份、检查原文件未并发改变、合并专属 hook、原子替换的顺序更新 Claude 设置。可移除专属 hook，保留其他配置。支持 native exec-form hooks，本机终端／Desktop Code 可共用；未覆盖远程和非 Code 模式。
 
 本地协议参考 [Agent HUD](https://github.com/jazzenchen/agent-hud-open/blob/main/Sources/AgentHUDCore/Providers/Claude/ClaudeEngineUsage.swift)，不是公开稳定 API。另已审查 [CC Switch](https://github.com/farion1231/cc-switch/blob/main/src-tauri/src/services/subscription.rs) 的直接 OAuth HTTP 实现；Wacu 未采用其凭据读取方式。目前真实 `get_usage` 响应尚未验收，默认 QA 使用离线样例并明确标注，只有 `check-claude.ps1 -Live` 显式启用联网验收。
 

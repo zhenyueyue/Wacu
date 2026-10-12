@@ -2,6 +2,8 @@
 
 mod child_process;
 mod claude;
+mod claude_activity;
+mod claude_schedule;
 mod codex;
 mod flow;
 mod glow;
@@ -207,6 +209,9 @@ fn start_usage_watcher(
 ) -> Timer {
     let timer = Timer::default();
     set_usage_status(settings, index, Some(service(index, true).status), false);
+    if index == 1 {
+        settings.set_claude_activity_connected(claude_activity::connected());
+    }
     let qa_live = if index == 0 {
         "WACU_QA_CODEX_LIVE"
     } else {
@@ -244,10 +249,25 @@ fn start_usage_watcher(
     });
     let busy = Rc::new(Cell::new(false));
     let cooldown = Rc::new(Cell::new(Instant::now()));
+    let schedule =
+        (index == 1).then(|| Rc::new(RefCell::new(claude_schedule::Schedule::new(Instant::now()))));
+    let monitor = (index == 1).then(claude_activity::Monitor::new);
+    if index == 1 {
+        settings.set_claude_activity_connected(claude_activity::connected());
+        settings.set_claude_working(monitor.as_ref().is_some_and(|m| m.active()));
+    }
     let request = {
         let busy = busy.clone();
         let cooldown = cooldown.clone();
-        Rc::new(move || {
+        let schedule = schedule.clone();
+        Rc::new(move |manual: bool| {
+            if manual
+                && schedule
+                    .as_ref()
+                    .is_some_and(|s| !s.borrow().due(Instant::now(), true, true, false))
+            {
+                return false;
+            }
             if Instant::now() < cooldown.get() || busy.replace(true) {
                 return false;
             }
@@ -255,18 +275,24 @@ fn start_usage_watcher(
                 busy.set(false);
                 return false;
             }
+            if let Some(schedule) = &schedule {
+                schedule.borrow_mut().begin(Instant::now());
+            }
             true
         })
     };
     set_usage_status(settings, index, Some(service(index, true).status), false);
-    if preferences.borrow().shown[index] && request() {
+    if preferences.borrow().shown[index]
+        && monitor.as_ref().is_none_or(|m| m.active())
+        && request(false)
+    {
         set_usage_status(settings, index, None, true);
     }
     {
         let request = request.clone();
         let settings_weak = settings.as_weak();
         let refresh = move || {
-            if request() {
+            if request(true) {
                 if let Some(settings) = settings_weak.upgrade() {
                     set_usage_status(&settings, index, None, true);
                 }
@@ -308,6 +334,11 @@ fn start_usage_watcher(
             if retry.is_some() {
                 cooldown.set(next_refresh);
             }
+            if let Some(schedule) = &schedule {
+                schedule
+                    .borrow_mut()
+                    .complete(Instant::now(), delay, retry.is_some());
+            }
             busy.set(false);
             let item = service(index, true);
             for row in 0..model.row_count() {
@@ -328,11 +359,29 @@ fn start_usage_watcher(
             }
         }
         let enabled = preferences.borrow().shown[index];
+        let working = monitor.as_ref().is_none_or(|m| m.active());
+        if let Some(settings) = settings.upgrade() {
+            if index == 1 {
+                settings.set_claude_working(working);
+                settings.set_claude_activity_connected(claude_activity::connected());
+                settings.set_claude_refresh_cooldown(
+                    schedule
+                        .as_ref()
+                        .unwrap()
+                        .borrow()
+                        .cooldown_seconds(Instant::now()),
+                );
+            }
+        }
         if enabled && !was_enabled {
             next_refresh = Instant::now();
         }
         was_enabled = enabled;
-        if !busy.get() && enabled && Instant::now() >= next_refresh && request() {
+        let due = schedule
+            .as_ref()
+            .map(|s| s.borrow().due(Instant::now(), false, enabled, working))
+            .unwrap_or(enabled && Instant::now() >= next_refresh);
+        if !busy.get() && due && request(false) {
             if let Some(settings) = settings.upgrade() {
                 set_usage_status(&settings, index, None, true);
             }
@@ -1974,6 +2023,29 @@ fn qa_entry_controls(
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    if std::env::args().any(|arg| arg == "--claude-activity-status") {
+        println!("{}", claude_activity::active_count());
+        return Ok(());
+    }
+    if std::env::args().any(|arg| arg == claude_activity::HOOK_ARG) {
+        claude_activity::handle_hook();
+        return Ok(());
+    }
+    if std::env::args().any(|arg| {
+        matches!(
+            arg.as_str(),
+            "--install-claude-activity" | "--uninstall-claude-activity"
+        )
+    }) {
+        let enable = std::env::args().any(|arg| arg == "--install-claude-activity");
+        let backup = claude_activity::install(&std::env::current_exe()?, enable)?;
+        println!(
+            "Wacu Claude activity {}. Backup: {:?}",
+            if enable { "connected" } else { "disconnected" },
+            backup
+        );
+        return Ok(());
+    }
     if std::env::args().any(|arg| arg == "--codex-usage-check") {
         match codex::fetch() {
             Ok(snapshot) => println!("{}", serde_json::to_string_pretty(&snapshot)?),
@@ -2191,6 +2263,25 @@ fn main() -> Result<(), Box<dyn Error>> {
     mini.set_animated(initial.animations_enabled);
     let menu = EntryMenuWindow::new()?;
     let settings = SettingsWindow::new()?;
+    {
+        let weak = settings.as_weak();
+        settings.on_connect_claude_activity(move || {
+            if let Some(settings) = weak.upgrade() {
+                match std::env::current_exe()
+                    .map_err(|e| e.to_string())
+                    .and_then(|exe| claude_activity::install(&exe, true).map_err(|e| e.to_string()))
+                {
+                    Ok(_) => {
+                        settings.set_claude_activity_connected(true);
+                        settings.set_status_message(
+                            "已连接本地工作状态。请新开 CLI 或 Desktop Code 会话。".into(),
+                        );
+                    }
+                    Err(error) => settings.set_status_message(error.into()),
+                }
+            }
+        });
+    }
     let detail = DetailWindow::new()?;
     #[cfg(debug_assertions)]
     let tray = Some(WacuTray::new()?);

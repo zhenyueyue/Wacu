@@ -880,6 +880,10 @@ export component SettingsWindow inherits Window {
     in property <bool> codex-refreshing: false;
     callback refresh-codex();
     in property <string> claude-status: "正在读取 Claude 额度…";
+    in property <bool> claude-activity-connected: false;
+    in property <bool> claude-working: false;
+    in property <int> claude-refresh-cooldown: 0;
+    callback connect-claude-activity();
     in property <bool> claude-refreshing: false;
     callback refresh-claude();
     callback set-pinned(bool);
@@ -971,10 +975,19 @@ export component SettingsWindow inherits Window {
                             SettingSwitch { label: "WorkBuddy"; hint: "积分额度"; checked: root.show-workbuddy; animated: root.animations-on; changed(value) => { root.toggle-service(2, value); } }
                             Text { height: (32px * Tokens.settings-scale); text: "Codex · " + root.codex-status; color: Tokens.secondary; font-size: (11px * Tokens.settings-scale); wrap: word-wrap; }
                             Text { height: (32px * Tokens.settings-scale); text: "Claude · " + root.claude-status; color: Tokens.secondary; font-size: (11px * Tokens.settings-scale); wrap: word-wrap; }
+                            Rectangle {
+                                height: (20px * Tokens.settings-scale);
+                                Text { width: parent.width; height: parent.height; text: !root.claude-activity-connected ? "Claude 工作状态检测未连接" : (root.claude-working ? "Claude 工作中 · 每 5 分钟刷新" : "Claude 空闲 · 自动刷新已暂停"); color: root.claude-working ? #86cfa4 : Tokens.muted; font-size: (11px * Tokens.settings-scale); vertical-alignment: center; }
+                                if !root.claude-activity-connected: Rectangle {
+                                    x: parent.width - self.width; width: 44px * Tokens.settings-scale; height: parent.height;
+                                    Text { text: "启用"; color: connect-hit.has-hover ? #85c5ff : #2997ff; font-size: (11px * Tokens.settings-scale); horizontal-alignment: right; vertical-alignment: center; }
+                                    connect-hit := TouchArea { mouse-cursor: pointer; clicked => { root.connect-claude-activity(); } }
+                                }
+                            }
                             HorizontalLayout {
                                 height: (40px * Tokens.settings-scale); spacing: (8px * Tokens.settings-scale);
                                 ActionRow { caption: root.codex-refreshing ? "正在刷新…" : "刷新 Codex 额度"; animated: root.animations-on; clicked => { root.refresh-codex(); } }
-                                ActionRow { caption: root.claude-refreshing ? "正在刷新…" : "刷新 Claude 额度"; animated: root.animations-on; clicked => { root.refresh-claude(); } }
+                                ActionRow { caption: root.claude-refreshing ? "正在刷新…" : (root.claude-refresh-cooldown > 0 ? "冷却 " + root.claude-refresh-cooldown + " 秒" : "刷新 Claude 额度"); animated: root.animations-on; clicked => { root.refresh-claude(); } }
                             }
                             Text { height: (40px * Tokens.settings-scale); text: "读取本机已登录账户的额度。\nWorkBuddy 仍为演示数据。"; color: Tokens.secondary; font-size: (12px * Tokens.settings-scale); wrap: word-wrap; }
                         }

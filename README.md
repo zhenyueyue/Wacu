@@ -47,7 +47,7 @@ Wacu 调用本机 Claude Code CLI 的 stream-json `get_usage` 控制请求，由
 - 查询前后通过 `claude auth status --json` 核对邮箱、组织及认证来源；详情注明 CLI 来源与脱敏账号。读取过程中切换账号会丢弃结果；切换账号后查询失败会清空旧额度，避免显示其他账号的缓存。
 - 读取 CLI 当前登录账号的 5 小时、每周及模型额度；相同账号在网页、CLI、Desktop 的用量[共享订阅限制](https://support.claude.com/en/articles/11647753-how-do-usage-and-length-limits-work)。Desktop 登录身份不会自动视作 CLI 身份，也不会把不同账号的额度相加。
 - 只显示服务返回的比例与重置时间，不推算固定 token 总量。额外用量只显示返回的比例，不推测金额单位。
-- 正常每 5 分钟刷新，错误退避至最长 30 分钟，限流至少等待 15 分钟；设置提供独立刷新按钮。单轮总超时 40 秒。
+- 工作期间最多每 5 分钟自动刷新一次，空闲、等待输入或授权时暂停；多个会话合并判断，不按圆环或会话重复查询。普通错误退避至最长 30 分钟，限流至少等待 15 分钟；手动刷新有 60 秒冷却。单轮总超时 40 秒。
 - 不提交提示词；关闭 hooks、工具、MCP、插件及会话持久化，在独立工作目录启动隐藏 CLI 子进程。继承 CLI 的环境与 `CLAUDE_CONFIG_DIR`；可用 `WACU_CLAUDE_PATH` 指定原生 `claude.exe`。
 
 ```powershell
@@ -59,6 +59,20 @@ cargo build
 ```
 
 对照研究：[CC Switch 订阅采集源码](https://github.com/farion1231/cc-switch/blob/main/src-tauri/src/services/subscription.rs)直接读取 CLI OAuth 凭据后请求 Anthropic `/api/oauth/usage`；它的订阅额度与本地累计 token 统计属于不同数据来源。Wacu 当前使用上述本地 CLI 协议，不直接管理凭据。
+
+### Claude 工作状态
+
+设置 → 服务管理 → Claude 工作状态旁的“启用”，连接 [Claude Code 本地生命周期 hooks](https://code.claude.com/docs/en/hooks)。终端 CLI 与 [Desktop 的本机 Code 会话共享设置及 hooks](https://code.claude.com/docs/en/desktop#use-cli-and-desktop-together)。普通 Chat、Cowork、SSH 和云端会话不属于此检测范围，Desktop 工作信号也不会替代 CLI 的登录身份核对。
+
+提交任务、执行工具时标记工作中，完成、等待输入或授权时暂停；后台子任务尚未完成时继续视为工作中。会话退出或进程消失后自动清理。检测只读本地状态文件，不查询 API，不读取对话、项目文件或 Desktop 凭据；hook 仅保留匿名会话标识、状态、进程 ID 与启动时间。Wacu 的额度查询子进程通过独立标记排除。
+
+连接时只合并 Wacu 的 hook，保留其他设置及原有 hooks，并在 `.claude` 配置目录生成原文件备份。使用支持 `args` 直接执行 hook 格式的近期 Claude Code；已有会话建议重新打开。未连接时不自动查询 Claude，仍可手动刷新；空闲启动后没有旧快照时显示 `--`。
+
+```powershell
+./target/release/wacu.exe --install-claude-activity
+./target/release/wacu.exe --uninstall-claude-activity # 只移除 Wacu 的状态 hook
+python ./scripts/check-claude-activity.py # 本地回放与配置测试，不启动 Claude
+```
 
 ## 开发与运行
 
