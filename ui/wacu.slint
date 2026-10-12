@@ -15,6 +15,7 @@ global Tokens {
 
 export struct Service {
     source-index: int, label: string, subtitle: string,
+    // Ring, headline and detail track all use remaining quota percentages.
     percent: float, used: string, total: string, remaining: string, reset: string,
     accent: color, arc: string, glow: image, visible: bool,
     percent-text: string, status: string, window-label: string, window-summary: string, quota-details: string,
@@ -684,7 +685,7 @@ export component DetailWindow inherits Window {
             }
             Rectangle {
                 height: (18px * Tokens.panel-scale);
-                Text { x: 0px; y: 0px; width: parent.width; height: parent.height; text: "用量进度"; color: Tokens.text; font-size: (13px * Tokens.panel-scale); font-weight: 600; vertical-alignment: center; }
+                Text { x: 0px; y: 0px; width: parent.width; height: parent.height; text: "剩余额度"; color: Tokens.text; font-size: (13px * Tokens.panel-scale); font-weight: 600; vertical-alignment: center; }
                 Text { x: 0px; y: 0px; width: parent.width; height: parent.height; text: root.selected-service.source-index < 2 ? "账户额度" : "演示数据"; color: Tokens.muted; font-size: (10px * Tokens.panel-scale); horizontal-alignment: right; vertical-alignment: center; }
             }
             Rectangle {

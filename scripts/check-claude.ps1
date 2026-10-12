@@ -7,6 +7,11 @@ $config = Join-Path $env:APPDATA 'Wacu\preferences.json'
 $before = if (Test-Path -LiteralPath $config) { (Get-FileHash -LiteralPath $config).Hash } else { $null }
 $cases = @('capsule', 'quick', 'detail', 'settings') | ForEach-Object { @{ Name = $_; View = $_; Fixture = 'ok' } }
 if (!$Live) {
+    foreach ($fixture in @('unused', 'exhausted')) {
+        foreach ($view in @('capsule', 'quick', 'detail')) {
+            $cases += @{ Name = "$fixture-$view"; View = $view; Fixture = $fixture }
+        }
+    }
     $cases += @{ Name = 'unauthorized'; View = 'quick'; Fixture = 'unauthorized' }
     $cases += @{ Name = 'rate-limited'; View = 'quick'; Fixture = 'rate-limited' }
 }

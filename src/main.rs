@@ -27,7 +27,7 @@ slint::include_modules!();
 
 const NAMES: [&str; 3] = ["Codex", "Claude Code", "WorkBuddy"];
 const SUBTITLES: [&str; 3] = ["OpenAI · ChatGPT", "Anthropic · Claude", "Credits · 积分"];
-// Used percentages (never remaining percentages). Explicitly marked demo in the UI.
+// Demo inputs are used percentages; UI rings and headline values show remaining quota.
 const VALUES: [i32; 3] = [13, 24, 2];
 
 thread_local! {
@@ -87,16 +87,16 @@ fn service(index: usize, visible: bool) -> Service {
         source_index: index as i32,
         label: NAMES[index].into(),
         subtitle: SUBTITLES[index].into(),
-        percent: VALUES[index] as f32,
+        percent: (100 - VALUES[index]) as f32,
         used: used.to_string().into(),
         total: "1,000".into(),
         remaining: (1000 - used).to_string().into(),
         reset: "2026/10/10 00:00".into(),
         accent: tint,
-        arc: arc_svg(VALUES[index]),
-        glow: glow::make(VALUES[index], tint),
+        arc: arc_svg(100 - VALUES[index]),
+        glow: glow::make(100 - VALUES[index], tint),
         visible,
-        percent_text: format!("{}%", VALUES[index]).into(),
+        percent_text: format!("{}%", 100 - VALUES[index]).into(),
         status: "演示数据".into(),
         window_label: "今日用量".into(),
         window_summary: format!("{used} 次").into(),
@@ -153,17 +153,23 @@ fn fill_quota_service(
     item.window_summary = "暂不可用".into();
     item.quota_details = details.unwrap_or(status).into();
     if let Some(window) = window {
-        if let Some(percent) = window.percent() {
-            item.percent = percent as f32;
-            item.percent_text = format!("{percent:.1}%").into();
-            item.arc = arc_percent(percent as f32);
-            item.glow = glow::make(percent.round() as i32, item.accent);
-            item.used = format!("{percent:.1}%").into();
+        if let Some(used) = window.percent() {
+            let remaining = 100.0 - used;
+            let remaining_text = if remaining == 0.0 || remaining == 100.0 {
+                format!("{remaining:.0}%")
+            } else {
+                format!("{remaining:.1}%")
+            };
+            item.percent = remaining as f32;
+            item.percent_text = remaining_text.clone().into();
+            item.arc = arc_percent(remaining as f32);
+            item.glow = glow::make(remaining.round() as i32, item.accent);
+            item.used = format!("{used:.1}%").into();
             item.total = "100%".into();
-            item.remaining = format!("{:.1}%", 100.0 - percent).into();
+            item.remaining = remaining_text.into();
             item.reset = window.reset().into();
             item.window_label = window.label().into();
-            item.window_summary = format!("已用 {percent:.1}%").into();
+            item.window_summary = format!("已用 {used:.1}%").into();
         }
     }
 }
@@ -1990,6 +1996,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "seven_day":{"utilization":33,"resets_at":"2026-10-18T12:00:00+08:00"},
                     "seven_day_sonnet":{"utilization":20,"resets_at":"2026-10-18T12:00:00+08:00"}
                 })),
+                "unused" | "exhausted" => claude::parse_snapshot(serde_json::json!({
+                    "five_hour":{"utilization":if fixture == "unused" { 0 } else { 100 }}
+                })),
                 _ => return Err("Unknown Claude QA fixture".into()),
             };
             CLAUDE_USAGE.with_borrow_mut(|state| state.apply(result));
@@ -3654,9 +3663,24 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .find(|item| item.source_index == 1)
                     .unwrap();
                 assert_eq!(actual.percent_text, expected.percent_text);
+                if let Ok(fixture) = std::env::var("WACU_QA_CLAUDE_FIXTURE") {
+                    if fixture == "unused" || fixture == "exhausted" {
+                        let remaining = if fixture == "unused" { 100.0 } else { 0.0 };
+                        assert_eq!(actual.percent, remaining);
+                        assert_eq!(
+                            actual.percent_text,
+                            if remaining == 100.0 { "100%" } else { "0%" }
+                        );
+                        assert_eq!(actual.arc, arc_percent(remaining));
+                    }
+                }
                 if mode == "quick" || mode == "detail" {
                     let detail = d.upgrade().unwrap();
                     assert_eq!(detail.get_selected_service().status, expected.status);
+                    assert_eq!(
+                        detail.get_selected_service().percent_text,
+                        expected.percent_text
+                    );
                     assert_eq!(
                         detail.get_selected_service().quota_details,
                         expected.quota_details
@@ -4023,7 +4047,7 @@ mod tests {
             let used: i32 = item.used.parse().unwrap();
             let remaining: i32 = item.remaining.parse().unwrap();
             assert_eq!(used + remaining, 1000);
-            assert_eq!(item.percent, (used / 10) as f32);
+            assert_eq!(item.percent, (remaining / 10) as f32);
         }
     }
 
@@ -4039,14 +4063,14 @@ mod tests {
             })))
         });
         let item = service(0, true);
-        assert_eq!(item.percent_text, "12.5%");
-        assert_eq!(item.percent, 12.5);
+        assert_eq!(item.percent_text, "87.5%");
+        assert_eq!(item.percent, 87.5);
         assert_eq!(item.remaining, "87.5%");
         assert_eq!(item.window_label, "5小时额度");
-        assert_eq!(item.arc, arc_percent(12.5));
+        assert_eq!(item.arc, arc_percent(87.5));
         assert!(item.quota_details.contains("每周额度"));
         CODEX_USAGE.with_borrow_mut(|state| state.apply(Err(codex::FetchError::Connection)));
-        assert_eq!(service(0, true).percent_text, "12.5%");
+        assert_eq!(service(0, true).percent_text, "87.5%");
         assert!(service(0, true).status.contains("保留上次数据"));
         CODEX_USAGE.with_borrow_mut(|state| state.apply(Err(codex::FetchError::Unauthorized)));
         assert_eq!(service(0, true).percent_text, "--");
@@ -4064,17 +4088,56 @@ mod tests {
             })))
         });
         let item = service(1, true);
-        assert_eq!(item.percent, 12.5);
+        assert_eq!(item.percent, 87.5);
         assert_eq!(item.remaining, "87.5%");
         assert_eq!(item.window_label, "5小时额度");
-        assert_eq!(item.arc, arc_percent(12.5));
+        assert_eq!(item.arc, arc_percent(87.5));
         assert!(item.quota_details.contains("每周额度"));
         CLAUDE_USAGE.with_borrow_mut(|state| state.apply(Err(claude::FetchError::Timeout)));
-        assert_eq!(service(1, true).percent_text, "12.5%");
+        assert_eq!(service(1, true).percent_text, "87.5%");
         assert!(service(1, true).status.contains("保留上次数据"));
         CLAUDE_USAGE.with_borrow_mut(|state| state.apply(Err(claude::FetchError::Unauthorized)));
         assert_eq!(service(1, true).percent_text, "--");
         assert!(service(1, true).arc.is_empty());
         CLAUDE_USAGE.with_borrow_mut(|state| *state = claude::UsageState::default());
+    }
+
+    #[test]
+    fn quota_rings_show_remaining_and_keep_unknown_data_distinct() {
+        let mut item = service(2, true);
+        for (used, remaining, text) in [
+            (0.0, 100.0, "100%"),
+            (12.5, 87.5, "87.5%"),
+            (100.0, 0.0, "0%"),
+        ] {
+            let window = quota::QuotaWindow {
+                used_percent: Some(used),
+                window_duration_mins: Some(300),
+                resets_at: None,
+            };
+            fill_quota_service(&mut item, "已连接".into(), Some(&window), None);
+            assert_eq!(item.percent, remaining);
+            assert_eq!(item.percent_text, text);
+            assert_eq!(item.remaining, text);
+            assert_eq!(item.used, format!("{used:.1}%"));
+            assert_eq!(item.arc, arc_percent(remaining));
+            if used == 0.0 {
+                assert!(item.arc.ends_with('Z'));
+            }
+            if used == 100.0 {
+                assert!(item.arc.is_empty());
+            }
+        }
+        for used in [None, Some(f64::NAN)] {
+            let window = quota::QuotaWindow {
+                used_percent: used,
+                window_duration_mins: Some(300),
+                resets_at: None,
+            };
+            fill_quota_service(&mut item, "等待额度".into(), Some(&window), None);
+            assert_eq!(item.percent_text, "--");
+            assert_eq!(item.remaining, "--");
+            assert!(item.arc.is_empty());
+        }
     }
 }
